@@ -10,7 +10,7 @@ use warpui::AppContext;
 use warpui::SingletonEntity;
 
 #[cfg(not(target_family = "wasm"))]
-use crate::ai::outline::{OutlineStatus, RepoOutlines};
+use crate::repo_outlines::{OutlineStatus, RepoOutlines};
 #[cfg(not(target_family = "wasm"))]
 use crate::workspace::ActiveSession;
 

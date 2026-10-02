@@ -9,18 +9,14 @@ use std::path::Path;
 use std::path::PathBuf;
 
 pub(crate) use imp::load_tab_configs;
-#[cfg(feature = "local_fs")]
-pub use imp::load_workflows;
 pub use imp::{load_launch_configs, load_theme_configs};
 use lazy_static::lazy_static;
 use warp_core::ui::theme::WarpTheme;
 use warpui::{Entity, ModelContext, SingletonEntity};
 
-use crate::ai::custom_model_routers::{CustomModelRouter, ModelConfigError};
 use crate::launch_configs::launch_config::LaunchConfig;
 use crate::tab_configs::{TabConfig, TabConfigError};
 use crate::themes::theme::{ThemeKind, WarpThemeConfig};
-use crate::workflows::workflow::Workflow;
 
 lazy_static! {
     pub static ref LAUNCH_CONFIG_COMMENT: String = format!(
@@ -54,20 +50,12 @@ lazy_static! {
 #[derive(Clone)]
 pub enum WarpConfigUpdateEvent {
     Themes,
-    #[cfg_attr(not(feature = "local_fs"), expect(dead_code))]
-    LocalUserWorkflows,
     LaunchConfigs,
     #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
     TabConfigs,
     /// Emitted when one or more tab config files failed to parse.
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
     TabConfigErrors(Vec<TabConfigError>),
-    /// The local `custom_model_routers/` custom model routers were created, modified, or deleted.
-    #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
-    ModelConfigs,
-    /// Emitted when one or more `custom_model_routers/` files failed to parse.
-    #[cfg_attr(target_family = "wasm", allow(dead_code))]
-    ModelConfigErrors(Vec<ModelConfigError>),
     /// The settings file (`settings.toml`) was created, modified, or deleted.
     #[cfg_attr(not(feature = "local_fs"), expect(dead_code))]
     Settings,
@@ -79,11 +67,10 @@ pub enum WarpConfigUpdateEvent {
     SettingsErrorsCleared,
 }
 
-/// Singleton model containing user configurable file entities like themes, launch configs, and
-/// workflows.
+/// Singleton model containing user configurable file entities like themes and launch configs.
 ///
 /// Emits events when entities are changed, which are detected via filesystem
-/// watchers on the user's `data_dir()` (themes, workflows, launch configs,
+/// watchers on the user's `data_dir()` (themes, launch configs,
 /// tab configs, etc.) and, on platforms where it differs, `config_local_dir()`
 /// (`settings.toml`, `keybindings.yaml`, `user_preferences.json`).
 #[derive(Default)]
@@ -93,13 +80,6 @@ pub struct WarpConfig {
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
     tab_config_errors: Vec<TabConfigError>,
     theme_config: WarpThemeConfig,
-    local_user_workflows: Vec<Workflow>,
-    /// User-defined custom model routers loaded from `~/.warp/custom_model_routers/`.
-    #[cfg_attr(target_family = "wasm", allow(dead_code))]
-    custom_model_routers: Vec<CustomModelRouter>,
-    /// Errors for `custom_model_routers/` files that failed to parse.
-    #[cfg_attr(target_family = "wasm", allow(dead_code))]
-    custom_model_router_errors: Vec<ModelConfigError>,
 }
 
 /// Platform-independent parts of WarpConfig.
@@ -107,7 +87,7 @@ pub struct WarpConfig {
 /// Additional platform-dependent functionality can be found in impl blocks
 /// in native.rs and wasm.rs.
 impl WarpConfig {
-    #[cfg(any(test, all(feature = "tui", feature = "test-util")))]
+    #[cfg(test)]
     pub fn mock(_ctx: &mut ModelContext<Self>) -> Self {
         Self {
             theme_config: WarpThemeConfig::new(),
@@ -125,22 +105,6 @@ impl WarpConfig {
 
     pub fn theme_config(&self) -> &WarpThemeConfig {
         &self.theme_config
-    }
-
-    pub fn local_user_workflows(&self) -> &Vec<Workflow> {
-        &self.local_user_workflows
-    }
-
-    /// The local (YAML-sourced) custom model routers.
-    #[cfg_attr(target_family = "wasm", allow(dead_code))]
-    pub fn custom_model_routers(&self) -> &Vec<CustomModelRouter> {
-        &self.custom_model_routers
-    }
-
-    /// Parse errors for `custom_model_routers/` files that failed to load.
-    #[cfg_attr(target_family = "wasm", allow(dead_code))]
-    pub fn custom_model_router_errors(&self) -> &Vec<ModelConfigError> {
-        &self.custom_model_router_errors
     }
 
     /// Saving the newly created launch configuration to the WarpConfig that we currently
@@ -199,12 +163,6 @@ pub fn themes_dir() -> PathBuf {
     warp_core::paths::themes_dir()
 }
 
-/// Returns the path to the directory containing the user's custom workflows.
-#[cfg_attr(target_family = "wasm", expect(dead_code))]
-pub fn workflows_dir() -> PathBuf {
-    crate::workflows::local_workflows::workflows_dir(base_dir())
-}
-
 /// Returns the path to the directory containing the user's launch
 /// configurations.
 pub fn launch_configs_dir() -> PathBuf {
@@ -214,13 +172,6 @@ pub fn launch_configs_dir() -> PathBuf {
 /// Returns the path to the directory containing the user's tab configs.
 pub fn tab_configs_dir() -> PathBuf {
     base_dir().join("tab_configs")
-}
-
-/// Returns the path to the directory containing the user's custom model router
-/// configs (`~/.warp/custom_model_routers/`). Each file defines a single router.
-#[cfg_attr(target_family = "wasm", expect(dead_code))]
-pub fn custom_model_routers_dir() -> PathBuf {
-    base_dir().join("custom_model_routers")
 }
 
 /// Returns the path to the directory containing the built-in default tab configs.
@@ -251,16 +202,28 @@ pub fn is_tab_config_toml(path: &Path) -> bool {
 /// from the embedded template if missing. Returns the path to the file.
 #[cfg(feature = "local_fs")]
 pub(crate) fn ensure_default_worktree_config() -> PathBuf {
+    const TEMPLATE: &str = include_str!("../../resources/tab_configs/default_worktree.toml");
+    ensure_default_tab_config("worktree.toml", TEMPLATE)
+}
+
+/// Like [`ensure_default_worktree_config`], for the config that creates jj workspaces.
+#[cfg(feature = "local_fs")]
+pub(crate) fn ensure_default_jj_workspace_config() -> PathBuf {
+    const TEMPLATE: &str = include_str!("../../resources/tab_configs/default_jj_workspace.toml");
+    ensure_default_tab_config("jj_workspace.toml", TEMPLATE)
+}
+
+#[cfg(feature = "local_fs")]
+fn ensure_default_tab_config(file_name: &str, template: &str) -> PathBuf {
     let dir = default_tab_configs_dir();
-    let path = dir.join("worktree.toml");
+    let path = dir.join(file_name);
     if !path.exists() {
         log::info!("Default worktree config missing; creating at {path:?}");
         if let Err(e) = std::fs::create_dir_all(&dir) {
             log::warn!("Failed to create default_tab_configs dir at {dir:?}: {e:?}");
             return path;
         }
-        const TEMPLATE: &str = include_str!("../../resources/tab_configs/default_worktree.toml");
-        if let Err(e) = std::fs::write(&path, TEMPLATE) {
+        if let Err(e) = std::fs::write(&path, template) {
             log::warn!("Failed to write default worktree config at {path:?}: {e:?}");
         } else {
             log::info!("Default worktree config created at {path:?}");
@@ -276,7 +239,6 @@ pub(crate) fn materialize_default_worktree_config(
     template_toml: &str,
     config_name: &str,
     repo_path: &str,
-    pane_type: &str,
 ) -> Result<(String, TabConfig), String> {
     let worktree_path = crate::tab_configs::tab_config::generated_worktree_path_string(
         Path::new(repo_path),
@@ -292,7 +254,7 @@ pub(crate) fn materialize_default_worktree_config(
         );
     }
 
-    replace_default_worktree_placeholders(&mut toml_value, repo_path, pane_type, &worktree_path);
+    replace_default_worktree_placeholders(&mut toml_value, repo_path, &worktree_path);
 
     if let Some(doc) = toml_value.as_table_mut()
         && let Some(params) = doc.get_mut("params").and_then(toml::Value::as_table_mut)
@@ -316,7 +278,6 @@ pub(crate) fn materialize_default_worktree_config(
 fn replace_default_worktree_placeholders(
     value: &mut toml::Value,
     repo_path: &str,
-    pane_type: &str,
     worktree_path: &str,
 ) {
     match value {
@@ -327,17 +288,19 @@ fn replace_default_worktree_placeholders(
                     worktree_path,
                 )
                 .replace("{{repo}}", repo_path)
-                .replace("{{pane_type}}", pane_type)
+                // Templates customized before the pane type became fixed still carry this
+                // placeholder.
+                .replace("{{pane_type}}", "terminal")
                 .replace("{{worktree_path_prefix}}", "");
         }
         toml::Value::Array(array) => {
             for value in array {
-                replace_default_worktree_placeholders(value, repo_path, pane_type, worktree_path);
+                replace_default_worktree_placeholders(value, repo_path, worktree_path);
             }
         }
         toml::Value::Table(table) => {
             for (_, value) in table.iter_mut() {
-                replace_default_worktree_placeholders(value, repo_path, pane_type, worktree_path);
+                replace_default_worktree_placeholders(value, repo_path, worktree_path);
             }
         }
         toml::Value::Boolean(_)

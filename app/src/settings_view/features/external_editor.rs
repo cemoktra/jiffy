@@ -1,6 +1,3 @@
-use std::cell::RefCell;
-use std::collections::HashMap;
-
 use settings::{Setting, ToggleableSetting};
 use warp_core::features::FeatureFlag;
 use warp_errors::report_if_error;
@@ -10,15 +7,10 @@ use warpui::ui_components::switch::SwitchStateHandle;
 use warpui::{Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
 
 use crate::appearance::Appearance;
-use crate::send_telemetry_from_ctx;
-use crate::server::telemetry::TelemetryEvent;
 use crate::settings_view::settings_page::{
-    AdditionalInfo, LocalOnlyIconState, ToggleState, render_body_item, render_dropdown_item,
+    AdditionalInfo, ToggleState, render_body_item, render_dropdown_item,
 };
-use crate::util::file::external_editor::settings::{
-    EditorChoice, EditorLayout, OpenCodePanelsFileEditor, OpenFileEditor, OpenFileLayout,
-    PreferMarkdownViewer, PreferTabbedEditorView,
-};
+use crate::util::file::external_editor::settings::{EditorChoice, EditorLayout};
 use crate::util::file::external_editor::{EditorSettings, SUPPORTED_EDITORS};
 use crate::view_components::{Dropdown, DropdownItem};
 
@@ -42,7 +34,6 @@ pub struct ExternalEditorView {
     tabbed_editor_view_mouse_state: SwitchStateHandle,
     prefer_markdown_viewer_switch: SwitchStateHandle,
     markdown_viewer_mouse_state: MouseStateHandle,
-    local_only_icon_states: RefCell<HashMap<String, MouseStateHandle>>,
 }
 
 impl ExternalEditorView {
@@ -109,7 +100,6 @@ impl ExternalEditorView {
             tabbed_editor_view_mouse_state: Default::default(),
             prefer_markdown_viewer_switch: Default::default(),
             markdown_viewer_mouse_state: Default::default(),
-            local_only_icon_states: Default::default(),
         }
     }
 
@@ -151,7 +141,7 @@ impl ExternalEditorView {
 
         let mut items = vec![default_app];
 
-        items.push(DropdownItem::new("Warp", make_action(EditorChoice::Warp)));
+        items.push(DropdownItem::new("Jiffy", make_action(EditorChoice::Warp)));
         if FeatureFlag::AllowOpeningFileLinksUsingEditorEnv.is_enabled() {
             items.push(DropdownItem::new(
                 "$EDITOR",
@@ -173,7 +163,7 @@ impl ExternalEditorView {
             EditorChoice::ExternalEditor(editor) => {
                 dropdown.set_selected_by_name(format!("{editor}"), ctx)
             }
-            EditorChoice::Warp => dropdown.set_selected_by_name("Warp", ctx),
+            EditorChoice::Warp => dropdown.set_selected_by_name("Jiffy", ctx),
             EditorChoice::EnvEditor => dropdown.set_selected_by_name("$EDITOR", ctx),
             EditorChoice::SystemDefault => dropdown.set_selected_by_name(default_option_text, ctx),
         };
@@ -184,14 +174,6 @@ impl ExternalEditorView {
         EditorSettings::handle(ctx).update(ctx, |settings, ctx| {
             report_if_error!(settings.open_file_editor.set_value(*editor, ctx));
         });
-
-        send_telemetry_from_ctx!(
-            TelemetryEvent::FeaturesPageAction {
-                action: "SetEditor".to_string(),
-                value: format!("{editor:?}")
-            },
-            ctx
-        );
     }
 
     fn set_code_panels_editor(&mut self, editor: &EditorChoice, ctx: &mut ViewContext<Self>) {
@@ -202,14 +184,6 @@ impl ExternalEditorView {
                     .set_value(*editor, ctx)
             );
         });
-
-        send_telemetry_from_ctx!(
-            TelemetryEvent::FeaturesPageAction {
-                action: "SetCodePanelsEditor".to_string(),
-                value: format!("{editor:?}")
-            },
-            ctx
-        );
     }
 
     // Handles [`ExternalEditorAction::SetLayout`] by updating the external editor layout settings.
@@ -217,51 +191,25 @@ impl ExternalEditorView {
         EditorSettings::handle(ctx).update(ctx, |settings, ctx| {
             report_if_error!(settings.open_file_layout.set_value(*layout, ctx));
         });
-
-        send_telemetry_from_ctx!(
-            TelemetryEvent::FeaturesPageAction {
-                action: "SetLayout".to_string(),
-                value: format!("{layout:?}")
-            },
-            ctx
-        );
     }
 
     /// Handles [`ExternalEditorAction::TogglePreferMarkdownViewer`]
     /// preference.
     fn toggle_prefer_markdown_viewer(&mut self, ctx: &mut ViewContext<Self>) {
-        let new_value = EditorSettings::handle(ctx).update(ctx, |settings, ctx| {
-            let new_value = settings.prefer_markdown_viewer.toggle_and_save_value(ctx);
-            report_if_error!(new_value);
-            new_value.unwrap_or(PreferMarkdownViewer::default_value())
+        EditorSettings::handle(ctx).update(ctx, |settings, ctx| {
+            report_if_error!(settings.prefer_markdown_viewer.toggle_and_save_value(ctx));
         });
-
-        send_telemetry_from_ctx!(
-            TelemetryEvent::FeaturesPageAction {
-                action: "TogglePreferMarkdownViewer".to_string(),
-                value: new_value.to_string()
-            },
-            ctx
-        );
     }
 
     /// Handles [`ExternalEditorAction::TogglePreferTabbedEditorView`] by updating the tabbed file viewer preference.
     fn toggle_prefer_tabbed_editor_view(&mut self, ctx: &mut ViewContext<Self>) {
-        let new_value = EditorSettings::handle(ctx).update(ctx, |settings, ctx| {
-            let new_value = settings
-                .prefer_tabbed_editor_view
-                .toggle_and_save_value(ctx);
-            report_if_error!(new_value);
-            new_value.unwrap_or(PreferTabbedEditorView::default_value())
+        EditorSettings::handle(ctx).update(ctx, |settings, ctx| {
+            report_if_error!(
+                settings
+                    .prefer_tabbed_editor_view
+                    .toggle_and_save_value(ctx)
+            );
         });
-
-        send_telemetry_from_ctx!(
-            TelemetryEvent::FeaturesPageAction {
-                action: "ToggleTabbedEditorView".to_string(),
-                value: new_value.to_string()
-            },
-            ctx
-        );
     }
 }
 
@@ -282,12 +230,6 @@ impl View for ExternalEditorView {
             "Choose an editor to open file links",
             None,
             None,
-            LocalOnlyIconState::for_setting(
-                OpenFileEditor::storage_key(),
-                OpenFileEditor::sync_to_cloud(),
-                &mut self.local_only_icon_states.borrow_mut(),
-                app,
-            ),
             None,
             &self.editor_dropdown,
         );
@@ -297,27 +239,15 @@ impl View for ExternalEditorView {
             "Choose an editor to open files from the code review panel, project explorer, and global search",
             None,
             None,
-            LocalOnlyIconState::for_setting(
-                OpenCodePanelsFileEditor::storage_key(),
-                OpenCodePanelsFileEditor::sync_to_cloud(),
-                &mut self.local_only_icon_states.borrow_mut(),
-                app,
-            ),
             None,
             &self.code_panels_editor_dropdown,
         );
 
         let default_layout = render_dropdown_item(
             appearance,
-            "Choose a layout to open files in Warp",
+            "Choose a layout to open files in Jiffy",
             None,
             None,
-            LocalOnlyIconState::for_setting(
-                OpenFileLayout::storage_key(),
-                OpenFileLayout::sync_to_cloud(),
-                &mut self.local_only_icon_states.borrow_mut(),
-                app,
-            ),
             None,
             &self.layout_dropdown,
         );
@@ -331,12 +261,6 @@ impl View for ExternalEditorView {
             column.add_child(render_body_item::<ExternalEditorAction>(
                 TABBED_FILE_VIEWER_TOGGLE_HEADER.into(),
                 None,
-                LocalOnlyIconState::for_setting(
-                    PreferTabbedEditorView::storage_key(),
-                    PreferTabbedEditorView::sync_to_cloud(),
-                    &mut self.local_only_icon_states.borrow_mut(),
-                    app,
-                ),
                 ToggleState::Enabled,
                 appearance,
                 appearance
@@ -357,7 +281,7 @@ impl View for ExternalEditorView {
         }
 
         column.add_child(render_body_item::<ExternalEditorAction>(
-            "Open Markdown files in Warp's Markdown Viewer by default".to_string(),
+            "Open Markdown files in Jiffy's Markdown Viewer by default".to_string(),
             Some(AdditionalInfo {
                 mouse_state: self.markdown_viewer_mouse_state.clone(),
                 on_click_action: Some(ExternalEditorAction::OpenUrl(
@@ -366,12 +290,6 @@ impl View for ExternalEditorView {
                 secondary_text: None,
                 tooltip_override_text: None,
             }),
-            LocalOnlyIconState::for_setting(
-                PreferMarkdownViewer::storage_key(),
-                PreferMarkdownViewer::sync_to_cloud(),
-                &mut self.local_only_icon_states.borrow_mut(),
-                app,
-            ),
             ToggleState::Enabled,
             appearance,
             appearance

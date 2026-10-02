@@ -1,0 +1,363 @@
+use std::collections::{HashMap, HashSet};
+use std::fs;
+
+use agent_context::skills::{ParsedSkill, SkillProvider, SkillScope, get_provider_for_path};
+use repo_metadata::repositories::DetectedRepositories;
+use repo_metadata::{DirectoryWatcher, RepoMetadataModel};
+use tempfile::TempDir;
+use warp_util::local_or_remote_path::LocalOrRemotePath;
+use warpui::App;
+use watcher::HomeDirectoryWatcher;
+
+use super::*;
+use crate::warp_managed_paths_watcher::WarpManagedPathsWatcher;
+
+// ============================================================================
+// Tests for get_skills_for_working_directory subdirectory scoping
+// ============================================================================
+
+#[test]
+fn get_skills_for_working_directory_scopes_subdirectory_skills() {
+    // This test verifies the key scoping behavior:
+    // - Root skills are visible from anywhere in the repo
+    // - Subdirectory skills are only visible when working_directory is within that subdirectory
+
+    // Use real temp directories so DetectedRepositories can canonicalize paths
+    // and correctly report repo_root, which controls ancestor-vs-descendant scoping.
+    // Canonicalize the temp base to avoid macOS /var -> /private/var symlink mismatches.
+    let temp = TempDir::new().unwrap();
+    let base = dunce::canonicalize(temp.path()).unwrap();
+    let repo = base.join("repo");
+    let frontend_dir = repo.join("packages/frontend");
+    let backend_dir = repo.join("packages/backend");
+    fs::create_dir_all(&frontend_dir).unwrap();
+    fs::create_dir_all(&backend_dir).unwrap();
+
+    // Create mock skills
+    let root_skill_path = LocalOrRemotePath::Local(repo.join(".agents/skills/root-skill/SKILL.md"));
+    let frontend_skill_path =
+        LocalOrRemotePath::Local(frontend_dir.join(".agents/skills/frontend-skill/SKILL.md"));
+
+    let root_skill = ParsedSkill {
+        name: "root-skill".to_string(),
+        description: "A root skill".to_string(),
+        path: root_skill_path.clone(),
+        content: "# Root skill".to_string(),
+        line_range: None,
+        provider: SkillProvider::Agents,
+        scope: SkillScope::Project,
+    };
+
+    let frontend_skill = ParsedSkill {
+        name: "frontend-skill".to_string(),
+        description: "A frontend skill".to_string(),
+        path: frontend_skill_path.clone(),
+        content: "# Frontend skill".to_string(),
+        line_range: None,
+        provider: SkillProvider::Agents,
+        scope: SkillScope::Project,
+    };
+
+    // Build the internal state manually
+    let mut directory_skills: HashMap<LocalOrRemotePath, HashSet<LocalOrRemotePath>> =
+        HashMap::new();
+    directory_skills
+        .entry(LocalOrRemotePath::Local(repo.clone()))
+        .or_default()
+        .insert(root_skill_path.clone());
+    directory_skills
+        .entry(LocalOrRemotePath::Local(frontend_dir.clone()))
+        .or_default()
+        .insert(frontend_skill_path.clone());
+
+    let mut skills_by_path: HashMap<LocalOrRemotePath, ParsedSkill> = HashMap::new();
+    skills_by_path.insert(root_skill_path.clone(), root_skill);
+    skills_by_path.insert(frontend_skill_path.clone(), frontend_skill);
+
+    App::test((), |mut app| async move {
+        app.add_singleton_model(DirectoryWatcher::new);
+        let repo_handle = app.add_singleton_model(|_| DetectedRepositories::default());
+        app.add_singleton_model(RepoMetadataModel::new);
+        app.add_singleton_model(HomeDirectoryWatcher::new_for_test);
+        app.add_singleton_model(WarpManagedPathsWatcher::new_for_testing);
+        let skill_manager_handle = app.add_singleton_model(SkillManager::new);
+
+        // Register the repo root so get_root_for_path returns Some.
+        let canonical_repo =
+            warp_util::standardized_path::StandardizedPath::from_local_canonicalized(&repo)
+                .unwrap();
+        repo_handle.update(&mut app, |repos, _ctx| {
+            repos.insert_test_repo_root(canonical_repo);
+        });
+
+        // Inject the test state
+        skill_manager_handle.update(&mut app, |manager, _ctx| {
+            manager.directory_skills = directory_skills;
+            manager.skills_by_path = skills_by_path;
+        });
+
+        // Test 1: From frontend directory, should see both root and frontend skills
+        let skills_from_frontend = skill_manager_handle.read(&app, |manager, ctx| {
+            manager.get_skills_for_working_directory(
+                Some(&LocalOrRemotePath::Local(frontend_dir.clone())),
+                ctx,
+            )
+        });
+        let names_from_frontend: Vec<&str> = skills_from_frontend
+            .iter()
+            .map(|s| s.name.as_str())
+            .collect();
+        assert!(
+            names_from_frontend.contains(&"root-skill"),
+            "Root skill should be visible from frontend dir"
+        );
+        assert!(
+            names_from_frontend.contains(&"frontend-skill"),
+            "Frontend skill should be visible from frontend dir"
+        );
+
+        // Test 2: From backend directory, should only see root skill (not frontend skill)
+        let skills_from_backend = skill_manager_handle.read(&app, |manager, ctx| {
+            manager.get_skills_for_working_directory(
+                Some(&LocalOrRemotePath::Local(backend_dir.clone())),
+                ctx,
+            )
+        });
+        let names_from_backend: Vec<&str> = skills_from_backend
+            .iter()
+            .map(|s| s.name.as_str())
+            .collect();
+        assert!(
+            names_from_backend.contains(&"root-skill"),
+            "Root skill should be visible from backend dir"
+        );
+        assert!(
+            !names_from_backend.contains(&"frontend-skill"),
+            "Frontend skill should NOT be visible from backend dir"
+        );
+
+        // Test 3: From repo root, should only see root skill (not frontend skill)
+        let skills_from_root = skill_manager_handle.read(&app, |manager, ctx| {
+            manager.get_skills_for_working_directory(
+                Some(&LocalOrRemotePath::Local(repo.clone())),
+                ctx,
+            )
+        });
+        let names_from_root: Vec<&str> = skills_from_root.iter().map(|s| s.name.as_str()).collect();
+        assert!(
+            names_from_root.contains(&"root-skill"),
+            "Root skill should be visible from repo root"
+        );
+        assert!(
+            !names_from_root.contains(&"frontend-skill"),
+            "Frontend skill should NOT be visible from repo root"
+        );
+    });
+}
+
+#[test]
+fn get_skills_for_working_directory_name_collision_returns_both() {
+    // When the same skill name exists at root and subdirectory, both should be returned.
+    // The caller (agent) is responsible for precedence based on path proximity.
+
+    // Use real temp directories so DetectedRepositories can canonicalize paths.
+    // Canonicalize the temp base to avoid macOS /var -> /private/var symlink mismatches.
+    let temp = TempDir::new().unwrap();
+    let base = dunce::canonicalize(temp.path()).unwrap();
+    let repo = base.join("repo");
+    let subdir = repo.join("packages/frontend");
+    fs::create_dir_all(&subdir).unwrap();
+
+    let root_skill_path = LocalOrRemotePath::Local(repo.join(".agents/skills/deploy/SKILL.md"));
+    let subdir_skill_path = LocalOrRemotePath::Local(subdir.join(".agents/skills/deploy/SKILL.md"));
+
+    let root_skill = ParsedSkill {
+        name: "deploy".to_string(),
+        description: "Root deploy".to_string(),
+        path: root_skill_path.clone(),
+        content: "# Root deploy".to_string(),
+        line_range: None,
+        provider: SkillProvider::Agents,
+        scope: SkillScope::Project,
+    };
+
+    let subdir_skill = ParsedSkill {
+        name: "deploy".to_string(),
+        description: "Subdir deploy".to_string(),
+        path: subdir_skill_path.clone(),
+        content: "# Subdir deploy".to_string(),
+        line_range: None,
+        provider: SkillProvider::Agents,
+        scope: SkillScope::Project,
+    };
+
+    let mut directory_skills: HashMap<LocalOrRemotePath, HashSet<LocalOrRemotePath>> =
+        HashMap::new();
+    directory_skills
+        .entry(LocalOrRemotePath::Local(repo.clone()))
+        .or_default()
+        .insert(root_skill_path.clone());
+    directory_skills
+        .entry(LocalOrRemotePath::Local(subdir.clone()))
+        .or_default()
+        .insert(subdir_skill_path.clone());
+
+    let mut skills_by_path: HashMap<LocalOrRemotePath, ParsedSkill> = HashMap::new();
+    skills_by_path.insert(root_skill_path.clone(), root_skill);
+    skills_by_path.insert(subdir_skill_path.clone(), subdir_skill);
+
+    App::test((), |mut app| async move {
+        app.add_singleton_model(DirectoryWatcher::new);
+        let repo_handle = app.add_singleton_model(|_| DetectedRepositories::default());
+        app.add_singleton_model(RepoMetadataModel::new);
+        app.add_singleton_model(HomeDirectoryWatcher::new_for_test);
+        app.add_singleton_model(WarpManagedPathsWatcher::new_for_testing);
+        let skill_manager_handle = app.add_singleton_model(SkillManager::new);
+
+        // Register the repo root so get_root_for_path returns Some.
+        let canonical_repo =
+            warp_util::standardized_path::StandardizedPath::from_local_canonicalized(&repo)
+                .unwrap();
+        repo_handle.update(&mut app, |repos, _ctx| {
+            repos.insert_test_repo_root(canonical_repo);
+        });
+
+        skill_manager_handle.update(&mut app, |manager, _ctx| {
+            manager.directory_skills = directory_skills;
+            manager.skills_by_path = skills_by_path;
+        });
+
+        // From subdir: should see both "deploy" skills (root + subdir)
+        let skills = skill_manager_handle.read(&app, |manager, ctx| {
+            manager.get_skills_for_working_directory(
+                Some(&LocalOrRemotePath::Local(subdir.clone())),
+                ctx,
+            )
+        });
+        let deploy_skills: Vec<_> = skills.iter().filter(|s| s.name == "deploy").collect();
+        assert_eq!(
+            deploy_skills.len(),
+            2,
+            "Both deploy skills should be visible from subdir"
+        );
+
+        // From repo root: should only see root "deploy"
+        let skills = skill_manager_handle.read(&app, |manager, ctx| {
+            manager.get_skills_for_working_directory(
+                Some(&LocalOrRemotePath::Local(repo.clone())),
+                ctx,
+            )
+        });
+        let deploy_skills: Vec<_> = skills.iter().filter(|s| s.name == "deploy").collect();
+        assert_eq!(
+            deploy_skills.len(),
+            1,
+            "Only root deploy should be visible from repo root"
+        );
+        assert_eq!(deploy_skills[0].description, "Root deploy");
+    });
+}
+
+// ============================================================================
+// Tests for best_supported_provider
+// ============================================================================
+
+/// Helper: creates a ParsedSkill under a given provider directory.
+fn make_skill(name: &str, provider_dir: &str) -> ParsedSkill {
+    let local_path = std::env::temp_dir()
+        .join("repo")
+        .join(provider_dir)
+        .join("skills")
+        .join(name)
+        .join("SKILL.md");
+    let path = LocalOrRemotePath::Local(local_path);
+    ParsedSkill {
+        name: name.to_string(),
+        description: format!("{name} skill"),
+        path: path.clone(),
+        content: format!("# {name}"),
+        line_range: None,
+        provider: get_provider_for_path(&path).unwrap_or(SkillProvider::Warp),
+        scope: SkillScope::Project,
+    }
+}
+
+#[test]
+fn best_supported_provider_fast_path_returns_deduped_provider() {
+    // When the deduped provider is already in the supported set, return it immediately.
+    App::test((), |mut app| async move {
+        app.add_singleton_model(DirectoryWatcher::new);
+        app.add_singleton_model(|_| DetectedRepositories::default());
+        app.add_singleton_model(RepoMetadataModel::new);
+        app.add_singleton_model(HomeDirectoryWatcher::new_for_test);
+        app.add_singleton_model(WarpManagedPathsWatcher::new_for_testing);
+        let handle = app.add_singleton_model(SkillManager::new);
+
+        let claude_skill = make_skill("deploy", ".claude");
+        handle.update(&mut app, |manager, _| {
+            manager.add_skill_for_testing(claude_skill.clone());
+        });
+
+        let descriptor = SkillDescriptor::from(claude_skill);
+        let result = handle.read(&app, |manager, _| {
+            manager.best_supported_provider(&descriptor, &[SkillProvider::Claude])
+        });
+        assert_eq!(result, SkillProvider::Claude);
+    });
+}
+
+#[test]
+fn best_supported_provider_remaps_to_supported_provider() {
+    // Skill exists under both .agents and .claude. Dedup picked Agents (higher priority).
+    // When supported set is [Claude], should re-map to Claude.
+    App::test((), |mut app| async move {
+        app.add_singleton_model(DirectoryWatcher::new);
+        app.add_singleton_model(|_| DetectedRepositories::default());
+        app.add_singleton_model(RepoMetadataModel::new);
+        app.add_singleton_model(HomeDirectoryWatcher::new_for_test);
+        app.add_singleton_model(WarpManagedPathsWatcher::new_for_testing);
+        let handle = app.add_singleton_model(SkillManager::new);
+
+        let agents_skill = make_skill("deploy", ".agents");
+        let claude_skill = make_skill("deploy", ".claude");
+        handle.update(&mut app, |manager, _| {
+            manager.add_skill_for_testing(agents_skill.clone());
+            manager.add_skill_for_testing(claude_skill.clone());
+        });
+
+        // Descriptor has provider = Agents (the dedup winner).
+        let descriptor = SkillDescriptor::from(agents_skill);
+        assert_eq!(descriptor.provider, SkillProvider::Agents);
+
+        let result = handle.read(&app, |manager, _| {
+            manager.best_supported_provider(&descriptor, &[SkillProvider::Claude])
+        });
+        assert_eq!(result, SkillProvider::Claude);
+    });
+}
+
+#[test]
+fn best_supported_provider_falls_back_when_no_match() {
+    // Skill only exists under .agents, but the supported set is [Claude].
+    // Should fall back to the original deduped provider (Agents).
+    App::test((), |mut app| async move {
+        app.add_singleton_model(DirectoryWatcher::new);
+        app.add_singleton_model(|_| DetectedRepositories::default());
+        app.add_singleton_model(RepoMetadataModel::new);
+        app.add_singleton_model(HomeDirectoryWatcher::new_for_test);
+        app.add_singleton_model(WarpManagedPathsWatcher::new_for_testing);
+        let handle = app.add_singleton_model(SkillManager::new);
+
+        let agents_skill = make_skill("deploy", ".agents");
+        handle.update(&mut app, |manager, _| {
+            manager.add_skill_for_testing(agents_skill.clone());
+        });
+
+        let descriptor = SkillDescriptor::from(agents_skill);
+        let result = handle.read(&app, |manager, _| {
+            manager.best_supported_provider(&descriptor, &[SkillProvider::Claude])
+        });
+        // No .claude path exists, so falls back to the deduped provider.
+        assert_eq!(result, SkillProvider::Agents);
+    });
+}

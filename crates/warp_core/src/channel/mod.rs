@@ -18,7 +18,7 @@ pub enum Channel {
     /// The internal-only HEAD build.
     Local,
 
-    /// The open-source build of Warp.
+    /// Jiffy, the local-only open-source build.
     Oss,
 
     /// The integration test build.
@@ -34,19 +34,6 @@ impl Channel {
         }
     }
 
-    /// Whether this channel honors the `--server-root-url` / `--ws-server-url` /
-    /// `--session-sharing-server-url` flags (and their `WARP_*` env-var equivalents).
-    ///
-    /// Release channels (`Stable`, `Preview`, `Oss`) ignore these overrides so shipped
-    /// builds can't be redirected away from their baked-in server URLs. Internal-only channels
-    /// (`Dev`, `Local`, `Integration`) continue to honor them for local development and testing.
-    pub fn allows_server_url_overrides(&self) -> bool {
-        match self {
-            Channel::Dev | Channel::Local | Channel::Integration => true,
-            Channel::Stable | Channel::Preview | Channel::Oss => false,
-        }
-    }
-
     /// Returns the CLI command name corresponding to this channel.
     pub fn cli_command_name(&self) -> &'static str {
         match self {
@@ -55,7 +42,7 @@ impl Channel {
             Channel::Preview => "oz-preview",
             Channel::Local => "oz-local",
             Channel::Integration => "oz-integration",
-            Channel::Oss => "warp-oss",
+            Channel::Oss => "jiffy",
         }
     }
 
@@ -67,7 +54,7 @@ impl Channel {
             Channel::Preview => "warpctrl-preview",
             Channel::Local => "warpctrl-local",
             Channel::Integration => "warpctrl-integration",
-            Channel::Oss => "warpctrl-oss",
+            Channel::Oss => "jiffyctrl",
         }
     }
 }
@@ -80,7 +67,7 @@ impl fmt::Display for Channel {
             Channel::Dev => "dev",
             Channel::Integration => "integration",
             Channel::Local => "local",
-            Channel::Oss => "warp-oss",
+            Channel::Oss => "jiffy",
         })
     }
 }

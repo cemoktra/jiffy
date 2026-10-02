@@ -7,7 +7,7 @@ use super::{ChipResult, ChipValue, ContextChipKind};
 use crate::menu::{MenuItem, MenuItemFields};
 use crate::settings::WarpPromptSeparator;
 use crate::terminal::model::session::Sessions;
-use crate::terminal::session_settings::{SessionSettings, ToolbarChipSelection};
+use crate::terminal::session_settings::SessionSettings;
 use crate::terminal::view::{ContextMenuAction, PromptPart, PromptPosition, TerminalAction};
 
 /// The type of warp prompt being used
@@ -57,7 +57,7 @@ impl PromptType {
         self.chips(ctx)
             .into_iter()
             .filter_map(|chip_result| {
-                if chip_result.value.is_some() && chip_result.kind.is_copyable() {
+                if chip_result.value.is_some() {
                     if let Some(chip) = chip_result.kind.to_chip() {
                         Some(
                             MenuItemFields::new(format!("Copy {}", chip.title()))
@@ -112,27 +112,6 @@ impl PromptType {
 
     pub fn chips(&self, ctx: &AppContext) -> Vec<ChipResult> {
         self.snapshot(ctx).chips().clone()
-    }
-
-    pub fn agent_view_chips(&self, ctx: &AppContext) -> Vec<ChipResult> {
-        let chip_kinds = SessionSettings::as_ref(ctx)
-            .agent_footer_chip_selection
-            .all_chips();
-        self.resolve_chip_kinds(chip_kinds, ctx)
-    }
-
-    pub fn agent_view_left_chips(&self, ctx: &AppContext) -> Vec<ChipResult> {
-        let chip_kinds = SessionSettings::as_ref(ctx)
-            .agent_footer_chip_selection
-            .left_chips();
-        self.resolve_chip_kinds(chip_kinds, ctx)
-    }
-
-    pub fn agent_view_right_chips(&self, ctx: &AppContext) -> Vec<ChipResult> {
-        let chip_kinds = SessionSettings::as_ref(ctx)
-            .agent_footer_chip_selection
-            .right_chips();
-        self.resolve_chip_kinds(chip_kinds, ctx)
     }
 
     pub fn cli_agent_chips(&self, ctx: &AppContext) -> Vec<ChipResult> {

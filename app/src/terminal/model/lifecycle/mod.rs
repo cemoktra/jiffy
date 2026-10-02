@@ -2,22 +2,15 @@
 //!
 //! `TerminalModel` supplies lifecycle inputs together with a snapshot of live block state. The
 //! coordinator reconciles its remembered phase against that snapshot, asks the pure transition
-//! policy for an action, and attaches rate-limited diagnostics when the action is conservative or
-//! corrective. Callers apply the planned action before committing its next phase.
+//! policy for an action. Callers apply the planned action before committing its next phase.
 
-mod telemetry;
 mod transition;
 
-pub use telemetry::LifecycleRecoveryRecord;
-pub(in crate::terminal) use telemetry::LifecycleTelemetryEvent;
-use telemetry::LifecycleTelemetryLimiter;
 pub(in crate::terminal) use transition::{
     CommandStartKind, IgnoreReason, LifecycleAction, LifecycleInput, LifecyclePhase,
     LifecycleSnapshot, LifecycleTransition, NextBlockIdDisposition, PreexecObservation,
 };
 use warp_core::features::FeatureFlag;
-
-use super::block::BlockState;
 
 /// Describes whether a command-start intent was accepted or conservatively ignored.
 ///
@@ -50,7 +43,6 @@ impl StartCommandOutcome {
 pub(super) struct BlockLifecycleCoordinator {
     phase: LifecyclePhase,
     epoch: u64,
-    telemetry_limiter: LifecycleTelemetryLimiter,
 }
 
 impl Default for BlockLifecycleCoordinator {
@@ -58,7 +50,6 @@ impl Default for BlockLifecycleCoordinator {
         Self {
             phase: LifecyclePhase::Unknown,
             epoch: 0,
-            telemetry_limiter: LifecycleTelemetryLimiter::default(),
         }
     }
 }
@@ -67,8 +58,8 @@ impl BlockLifecycleCoordinator {
     /// Plans the action and next phase for an observed lifecycle input.
     ///
     /// Planning first reconciles the remembered phase with live block evidence so stale internal
-    /// state cannot authorize a mutation. It then evaluates the pure transition policy and may
-    /// attach a rate-limited diagnostic record. This method does not advance the remembered phase;
+    /// state cannot authorize a mutation. It then evaluates the pure transition policy. This
+    /// method does not advance the remembered phase;
     /// the caller must apply the returned action and then call [`Self::commit`].
     pub(super) fn plan(
         &mut self,
@@ -104,48 +95,16 @@ impl BlockLifecycleCoordinator {
             } else {
                 (planned_next_phase, planned_action)
             };
-        let reconciles_missing_execution = matches!(
-            (input, planned_action),
-            (
-                LifecycleInput::CommandFinished(NextBlockIdDisposition::Novel),
-                LifecycleAction::AcceptCommandFinished,
-            )
-        ) && !snapshot.finished
-            && snapshot.block_state != BlockState::Executing;
-        let should_record = action.is_ignored()
-            || is_gated_recovery
-            || reconciles_missing_execution
-            || snapshot.completion_mismatch
-            || matches!(
-                (previous_phase, input),
-                (
-                    LifecyclePhase::AwaitingPrecmd | LifecyclePhase::Unknown,
-                    LifecycleInput::StartCommand(_) | LifecycleInput::Preexec(_)
-                )
-            );
-        let recovery_record = should_record
-            .then(|| {
-                LifecycleRecoveryRecord::new(
-                    previous_phase,
-                    next_phase,
-                    input.kind(),
-                    action,
-                    snapshot,
-                )
-            })
-            .and_then(|record| self.telemetry_limiter.record(record));
-
         LifecycleTransition {
             previous_phase,
             next_phase,
             action,
-            recovery_record,
         }
     }
 
     /// Commits a transition after its planned action has been applied.
     ///
-    /// Beginning a shell epoch advances the diagnostic epoch counter, and every committed
+    /// Beginning a shell epoch advances the epoch counter, and every committed
     /// transition replaces the coordinator's remembered phase with its planned next phase.
     pub(super) fn commit(&mut self, transition: &LifecycleTransition) {
         if matches!(transition.action, LifecycleAction::BeginEpoch) {
@@ -154,7 +113,8 @@ impl BlockLifecycleCoordinator {
         self.phase = transition.next_phase;
     }
 
-    /// Forgets the remembered phase after externally supplied block state replaces or extends it.
+    /// Forgets the remembered phase, as if externally supplied block state had replaced it.
+    #[cfg(test)]
     pub(super) fn reset_unknown(&mut self) {
         self.phase = LifecyclePhase::Unknown;
     }

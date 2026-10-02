@@ -767,10 +767,6 @@ impl HeaderGrid {
         self.command_start_time
     }
 
-    pub fn num_secrets_obfuscated(&self) -> usize {
-        self.prompt_and_command_grid.num_secrets_obfuscated()
-    }
-
     pub fn prompt_and_command_find<'a>(&'a self, dfas: &'a RegexDFAs) -> RegexIter<'a> {
         self.prompt_and_command_grid.find(dfas)
     }

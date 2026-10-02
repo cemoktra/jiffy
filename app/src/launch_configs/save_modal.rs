@@ -25,8 +25,6 @@ use crate::editor::{
     EditorView, Event as EditorEvent, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions,
 };
 use crate::launch_configs::launch_config::LaunchConfig;
-use crate::send_telemetry_from_ctx;
-use crate::server::telemetry::TelemetryEvent;
 use crate::user_config::launch_configs_dir;
 #[cfg(feature = "local_fs")]
 use crate::user_config::{WarpConfig, util::file_name_to_human_readable_name};
@@ -254,7 +252,6 @@ impl LaunchConfigSaveModal {
                 target,
                 line_col: None,
             });
-            send_telemetry_from_ctx!(TelemetryEvent::OpenLaunchConfigFile, ctx);
         }
     }
 
@@ -473,23 +470,11 @@ impl LaunchConfigSaveModal {
 
     pub fn saved_successfully(&mut self, file_name: String, ctx: &mut ViewContext<Self>) {
         self.set_save_state(SaveState::Success, Some(file_name));
-        send_telemetry_from_ctx!(
-            TelemetryEvent::SaveLaunchConfig {
-                state: SaveState::Success,
-            },
-            ctx
-        );
         ctx.notify();
     }
 
     pub fn failed_save(&mut self, failure_type: FailureType, ctx: &mut ViewContext<Self>) {
         self.set_save_state(SaveState::Failure(failure_type), None);
-        send_telemetry_from_ctx!(
-            TelemetryEvent::SaveLaunchConfig {
-                state: SaveState::Failure(failure_type)
-            },
-            ctx
-        );
         ctx.notify();
     }
 
@@ -669,8 +654,7 @@ impl TypedActionView for LaunchConfigSaveModal {
     fn handle_action(&mut self, action: &ActionRequest, ctx: &mut ViewContext<Self>) {
         // TODO(vorporeal): We should figure out a better way to handle the
         // interactions with the filesystem here, whether it's compiling out
-        // the save modal more completely or doing something else.  Perhaps
-        // this will become moot when we put launch configs in Warp Drive.
+        // the save modal more completely or doing something else.
         let action = match action {
             ActionRequest::Action(action) => action.clone(),
             ActionRequest::Enter => LaunchConfigSaveAction::from_state(&self.save_state),

@@ -1,11 +1,5 @@
-//! The "Third party CLI agents" settings page, shown under the Agents umbrella.
-//!
-//! Everything on this page controls third-party coding agents (Claude Code,
-//! Codex, Gemini CLI) rather than Warp's own AI, so its settings are always
-//! interactive regardless of the global AI toggle.
-
-use std::cell::RefCell;
-use std::collections::HashMap;
+//! The "Third party CLI agents" settings page, shown under the Agents umbrella. It controls
+//! third-party coding agents such as Claude Code, Codex and Gemini CLI.
 
 use enum_iterator::all;
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
@@ -25,37 +19,26 @@ use warpui::{
     Action, AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle, id,
 };
 
-use super::ai_shared::{
-    render_ai_feature_switch, render_ai_setting_toggle, render_toolbar_layout_editor, styles,
-    update_editor_interaction_state,
-};
 use super::settings_page::{
-    AdditionalInfo, CONTENT_FONT_SIZE, LocalOnlyIconState, MatchData, PageTitle, PageType,
-    SettingsPageMeta, SettingsPageViewHandle, SettingsWidget, ToggleState, build_toggle_element,
+    AdditionalInfo, CONTENT_FONT_SIZE, MatchData, PageTitle, PageType, SettingsPageMeta,
+    SettingsPageViewHandle, SettingsWidget, ToggleState, build_toggle_element,
     render_body_item_label,
 };
 use super::{SettingsAction, SettingsSection, ToggleSettingActionPair, flags};
-use crate::ai::blocklist::agent_view::agent_input_footer::editor::{
-    AgentToolbarEditorMode, AgentToolbarInlineEditor,
-};
 use crate::appearance::Appearance;
+use crate::editor::InteractionState;
 use crate::menu::{MenuItem, MenuItemFields};
-use crate::settings::{
-    AISettings, AISettingsChangedEvent, AutoDismissRichInputAfterSubmit,
-    AutoOpenRichInputOnCLIAgentStart, AutoToggleRichInput, ShouldRenderCLIAgentToolbar,
-    SubmitRichInputOnCtrlEnter,
-};
+use crate::settings::{CLIAgentSettings, CLIAgentSettingsChangedEvent};
 use crate::terminal::CLIAgent;
+use crate::terminal::cli_agent_footer::editor::AgentToolbarInlineEditor;
 use crate::util::bindings;
 use crate::view_components::dropdown::DropdownAction;
 use crate::view_components::{Dropdown, SubmittableTextInput, SubmittableTextInputEvent};
-use crate::{TelemetryEvent, send_telemetry_from_ctx};
 
 const PAGE_TITLE: &str = "Third party CLI agents";
 
 pub struct CLIAgentsPageView {
     page: PageType<Self>,
-    local_only_icon_tooltip_states: RefCell<HashMap<String, MouseStateHandle>>,
     cli_agent_footer_command_editor: ViewHandle<SubmittableTextInput>,
     cli_agent_footer_command_mouse_state_handles: Vec<MouseStateHandle>,
     cli_agent_footer_command_agent_dropdowns: Vec<ViewHandle<Dropdown<CLIAgentsPageAction>>>,
@@ -70,16 +53,15 @@ impl CLIAgentsPageView {
             input.set_placeholder_text("command (supports regex)", ctx);
             input
         });
-        update_editor_interaction_state(
-            cli_agent_footer_command_editor.as_ref(ctx).editor().clone(),
-            true,
-            ctx,
-        );
+        let command_editor = cli_agent_footer_command_editor.as_ref(ctx).editor().clone();
+        command_editor.update(ctx, |editor, ctx| {
+            editor.set_interaction_state(InteractionState::Editable, ctx);
+        });
         ctx.subscribe_to_view(
             &cli_agent_footer_command_editor,
             |_, _, event, ctx| match event {
                 SubmittableTextInputEvent::Submit(command) => {
-                    AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    CLIAgentSettings::handle(ctx).update(ctx, |settings, ctx| {
                         settings.add_cli_agent_footer_enabled_command(command, ctx);
                     });
                 }
@@ -87,23 +69,22 @@ impl CLIAgentsPageView {
             },
         );
 
-        let cli_agent_footer_command_mouse_state_handles = AISettings::as_ref(ctx)
+        let cli_agent_footer_command_mouse_state_handles = CLIAgentSettings::as_ref(ctx)
             .cli_agent_footer_enabled_commands
             .value()
             .keys()
             .map(|_| Default::default())
             .collect();
 
-        let cli_agent_toolbar_inline_editor = ctx.add_typed_action_view(|ctx| {
-            AgentToolbarInlineEditor::new(AgentToolbarEditorMode::CLIAgent, ctx)
-        });
+        let cli_agent_toolbar_inline_editor =
+            ctx.add_typed_action_view(AgentToolbarInlineEditor::new);
 
-        ctx.subscribe_to_model(&AISettings::handle(ctx), |me, _, event, ctx| {
+        ctx.subscribe_to_model(&CLIAgentSettings::handle(ctx), |me, _, event, ctx| {
             // Adding or removing a command changes the length of the command
             // list, so both the per-row mouse states and the per-row agent
             // dropdowns have to be rebuilt to stay index-aligned with it.
-            if let AISettingsChangedEvent::CLIAgentToolbarEnabledCommands { .. } = event {
-                me.cli_agent_footer_command_mouse_state_handles = AISettings::as_ref(ctx)
+            if let CLIAgentSettingsChangedEvent::CLIAgentToolbarEnabledCommands { .. } = event {
+                me.cli_agent_footer_command_mouse_state_handles = CLIAgentSettings::as_ref(ctx)
                     .cli_agent_footer_enabled_commands
                     .value()
                     .keys()
@@ -116,7 +97,6 @@ impl CLIAgentsPageView {
 
         Self {
             page: Self::build_page(),
-            local_only_icon_tooltip_states: Default::default(),
             cli_agent_footer_command_editor,
             cli_agent_footer_command_mouse_state_handles,
             cli_agent_footer_command_agent_dropdowns: Self::create_cli_agent_dropdowns(ctx),
@@ -140,7 +120,7 @@ impl CLIAgentsPageView {
     fn create_cli_agent_dropdowns(
         ctx: &mut ViewContext<Self>,
     ) -> Vec<ViewHandle<Dropdown<CLIAgentsPageAction>>> {
-        let entries: Vec<(String, CLIAgent)> = AISettings::as_ref(ctx)
+        let entries: Vec<(String, CLIAgent)> = CLIAgentSettings::as_ref(ctx)
             .cli_agent_footer_enabled_commands
             .value()
             .iter()
@@ -251,33 +231,23 @@ impl TypedActionView for CLIAgentsPageView {
     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
         match action {
             CLIAgentsPageAction::ToggleCLIAgentToolbar => {
-                match AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                if let Err(e) = CLIAgentSettings::handle(ctx).update(ctx, |settings, ctx| {
                     settings
                         .should_render_cli_agent_footer
                         .toggle_and_save_value(ctx)
                 }) {
-                    Ok(new_value) => {
-                        send_telemetry_from_ctx!(
-                            TelemetryEvent::ToggleCLIAgentToolbarSetting {
-                                is_enabled: new_value,
-                            },
-                            ctx
-                        );
-                    }
-                    Err(e) => {
-                        log::warn!("Failed to set value for CLI Agent Footer setting: {e:?}");
-                    }
+                    log::warn!("Failed to set value for CLI Agent Footer setting: {e:?}");
                 }
                 ctx.notify();
             }
             CLIAgentsPageAction::ToggleAutoToggleRichInput => {
-                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                CLIAgentSettings::handle(ctx).update(ctx, |settings, ctx| {
                     report_if_error!(settings.auto_toggle_rich_input.toggle_and_save_value(ctx));
                 });
                 ctx.notify();
             }
             CLIAgentsPageAction::ToggleAutoOpenRichInputOnCLIAgentStart => {
-                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                CLIAgentSettings::handle(ctx).update(ctx, |settings, ctx| {
                     report_if_error!(
                         settings
                             .auto_open_rich_input_on_cli_agent_start
@@ -287,7 +257,7 @@ impl TypedActionView for CLIAgentsPageView {
                 ctx.notify();
             }
             CLIAgentsPageAction::ToggleAutoDismissRichInputAfterSubmit => {
-                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                CLIAgentSettings::handle(ctx).update(ctx, |settings, ctx| {
                     report_if_error!(
                         settings
                             .auto_dismiss_rich_input_after_submit
@@ -297,18 +267,18 @@ impl TypedActionView for CLIAgentsPageView {
                 ctx.notify();
             }
             CLIAgentsPageAction::ToggleSubmitRichInputOnCtrlEnter => {
-                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                CLIAgentSettings::handle(ctx).update(ctx, |settings, ctx| {
                     report_if_error!(settings.submit_on_ctrl_enter.toggle_and_save_value(ctx));
                 });
                 ctx.notify();
             }
             CLIAgentsPageAction::RemoveCLIAgentToolbarEnabledCommand(command) => {
-                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                CLIAgentSettings::handle(ctx).update(ctx, |settings, ctx| {
                     settings.remove_cli_agent_footer_enabled_command(command, ctx);
                 });
             }
             CLIAgentsPageAction::SetCLIAgentForCommand { pattern, agent } => {
-                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                CLIAgentSettings::handle(ctx).update(ctx, |settings, ctx| {
                     settings.set_cli_agent_for_command(pattern, *agent, ctx);
                 });
             }
@@ -322,7 +292,7 @@ impl SettingsPageMeta for CLIAgentsPageView {
     }
 
     fn should_render(&self, _ctx: &AppContext) -> bool {
-        FeatureFlag::AgentMode.is_enabled()
+        true
     }
 
     fn update_filter(&mut self, query: &str, ctx: &mut ViewContext<Self>) -> MatchData {
@@ -422,19 +392,17 @@ impl SettingsWidget for CLIAgentWidget {
 
     fn render(
         &self,
-        view: &Self::View,
+        _view: &Self::View,
         appearance: &Appearance,
         app: &AppContext,
     ) -> Box<dyn Element> {
-        let ai_settings = AISettings::as_ref(app);
+        let cli_agent_settings = CLIAgentSettings::as_ref(app);
 
-        let cli_agent_footer_toggle = render_ai_setting_toggle::<ShouldRenderCLIAgentToolbar>(
+        let cli_agent_footer_toggle = render_setting_toggle(
             "Show coding agent toolbar",
             CLIAgentsPageAction::ToggleCLIAgentToolbar,
-            *ai_settings.should_render_cli_agent_footer,
-            true,
+            *cli_agent_settings.should_render_cli_agent_footer,
             self.cli_agent_footer_toggle.clone(),
-            &view.local_only_icon_tooltip_states,
             app,
         );
 
@@ -455,7 +423,7 @@ impl SettingsWidget for CLIAgentWidget {
             appearance.ui_font_size(),
             appearance.ui_font_family(),
             appearance.monospace_font_family(),
-            styles::description_font_color(true, app).into(),
+            styles::description_font_color(app).into(),
             HighlightedHyperlink::default(),
         );
 
@@ -473,7 +441,7 @@ impl SettingsWidget for CLIAgentWidget {
 }
 
 fn should_render_cli_agent_detail(app: &AppContext) -> bool {
-    *AISettings::as_ref(app).should_render_cli_agent_footer
+    *CLIAgentSettings::as_ref(app).should_render_cli_agent_footer
 }
 
 fn should_render_cli_agent_rich_input(app: &AppContext) -> bool {
@@ -499,7 +467,7 @@ impl SettingsWidget for CLIAgentAutoToggleRichInputWidget {
 
     fn render(
         &self,
-        view: &Self::View,
+        _view: &Self::View,
         appearance: &Appearance,
         app: &AppContext,
     ) -> Box<dyn Element> {
@@ -509,7 +477,7 @@ impl SettingsWidget for CLIAgentAutoToggleRichInputWidget {
 
         let label = render_body_item_label::<CLIAgentsPageAction>(
             "Auto show/hide Rich Input based on agent status".into(),
-            Some(styles::header_font_color(true, app)),
+            Some(styles::header_font_color(app)),
             Some(AdditionalInfo {
                 mouse_state: self.info_tooltip.clone(),
                 on_click_action: None,
@@ -518,22 +486,15 @@ impl SettingsWidget for CLIAgentAutoToggleRichInputWidget {
                     "Requires the Warp plugin for your coding agent".to_owned(),
                 ),
             }),
-            LocalOnlyIconState::for_setting(
-                AutoToggleRichInput::storage_key(),
-                AutoToggleRichInput::sync_to_cloud(),
-                &mut view.local_only_icon_tooltip_states.borrow_mut(),
-                app,
-            ),
             ToggleState::Enabled,
             appearance,
         );
 
         build_toggle_element(
             label,
-            render_ai_feature_switch(
+            render_feature_switch(
                 self.toggle.clone(),
-                *AISettings::as_ref(app).auto_toggle_rich_input,
-                true,
+                *CLIAgentSettings::as_ref(app).auto_toggle_rich_input,
                 CLIAgentsPageAction::ToggleAutoToggleRichInput,
                 app,
             ),
@@ -561,7 +522,7 @@ impl SettingsWidget for CLIAgentAutoOpenRichInputWidget {
 
     fn render(
         &self,
-        view: &Self::View,
+        _view: &Self::View,
         _appearance: &Appearance,
         app: &AppContext,
     ) -> Box<dyn Element> {
@@ -569,13 +530,11 @@ impl SettingsWidget for CLIAgentAutoOpenRichInputWidget {
             return Empty::new().finish();
         }
 
-        render_ai_setting_toggle::<AutoOpenRichInputOnCLIAgentStart>(
+        render_setting_toggle(
             "Auto open Rich Input when a coding agent session starts",
             CLIAgentsPageAction::ToggleAutoOpenRichInputOnCLIAgentStart,
-            *AISettings::as_ref(app).auto_open_rich_input_on_cli_agent_start,
-            true,
+            *CLIAgentSettings::as_ref(app).auto_open_rich_input_on_cli_agent_start,
             self.toggle.clone(),
-            &view.local_only_icon_tooltip_states,
             app,
         )
     }
@@ -599,7 +558,7 @@ impl SettingsWidget for CLIAgentAutoDismissRichInputWidget {
 
     fn render(
         &self,
-        view: &Self::View,
+        _view: &Self::View,
         _appearance: &Appearance,
         app: &AppContext,
     ) -> Box<dyn Element> {
@@ -607,13 +566,11 @@ impl SettingsWidget for CLIAgentAutoDismissRichInputWidget {
             return Empty::new().finish();
         }
 
-        render_ai_setting_toggle::<AutoDismissRichInputAfterSubmit>(
+        render_setting_toggle(
             "Auto dismiss Rich Input after prompt submission",
             CLIAgentsPageAction::ToggleAutoDismissRichInputAfterSubmit,
-            *AISettings::as_ref(app).auto_dismiss_rich_input_after_submit,
-            true,
+            *CLIAgentSettings::as_ref(app).auto_dismiss_rich_input_after_submit,
             self.toggle.clone(),
-            &view.local_only_icon_tooltip_states,
             app,
         )
     }
@@ -637,7 +594,7 @@ impl SettingsWidget for CLIAgentSubmitRichInputWidget {
 
     fn render(
         &self,
-        view: &Self::View,
+        _view: &Self::View,
         _appearance: &Appearance,
         app: &AppContext,
     ) -> Box<dyn Element> {
@@ -645,13 +602,11 @@ impl SettingsWidget for CLIAgentSubmitRichInputWidget {
             return Empty::new().finish();
         }
 
-        render_ai_setting_toggle::<SubmitRichInputOnCtrlEnter>(
+        render_setting_toggle(
             "Submit Rich Input with Ctrl+Enter",
             CLIAgentsPageAction::ToggleSubmitRichInputOnCtrlEnter,
-            *AISettings::as_ref(app).submit_on_ctrl_enter,
-            true,
+            *CLIAgentSettings::as_ref(app).submit_on_ctrl_enter,
             self.toggle.clone(),
-            &view.local_only_icon_tooltip_states,
             app,
         )
     }
@@ -696,7 +651,7 @@ impl SettingsWidget for CLIAgentCommandsWidget {
 
         let background = appearance.theme().surface_1();
         let font_color = appearance.theme().foreground();
-        let items: Vec<_> = AISettings::as_ref(app)
+        let items: Vec<_> = CLIAgentSettings::as_ref(app)
             .cli_agent_footer_enabled_commands
             .value()
             .keys()
@@ -770,7 +725,7 @@ impl SettingsWidget for CLIAgentCommandsWidget {
             .paragraph("Add regex patterns to show the coding agent toolbar for matching commands.")
             .with_style(UiComponentStyles {
                 font_size: Some(appearance.ui_font_size()),
-                font_color: Some(styles::description_font_color(true, app).into()),
+                font_color: Some(styles::description_font_color(app).into()),
                 margin: Some(
                     Coords::default()
                         .top(4.)
@@ -813,5 +768,100 @@ impl SettingsWidget for CLIAgentToolbarLayoutWidget {
         }
 
         render_toolbar_layout_editor(&view.cli_agent_toolbar_inline_editor, appearance)
+    }
+}
+
+/// The "Toolbar layout" chip editor for the coding agent toolbar.
+fn render_toolbar_layout_editor(
+    editor: &ViewHandle<AgentToolbarInlineEditor>,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
+    let label = Container::new(
+        appearance
+            .ui_builder()
+            .span("Toolbar layout".to_string())
+            .with_style(UiComponentStyles {
+                font_size: Some(CONTENT_FONT_SIZE),
+                ..Default::default()
+            })
+            .build()
+            .finish(),
+    )
+    .with_margin_bottom(4.)
+    .finish();
+    let editor = Container::new(ChildView::new(editor).finish())
+        .with_margin_bottom(16.)
+        .finish();
+
+    Flex::column().with_child(label).with_child(editor).finish()
+}
+
+/// A settings row: label on the left, switch on the right.
+fn render_setting_toggle(
+    label: impl Into<String>,
+    action: CLIAgentsPageAction,
+    is_setting_enabled: bool,
+    switch_state: SwitchStateHandle,
+    app: &AppContext,
+) -> Box<dyn Element> {
+    let appearance = Appearance::as_ref(app);
+    build_toggle_element(
+        render_body_item_label::<SettingsAction>(
+            label.into(),
+            Some(styles::header_font_color(app)),
+            None,
+            ToggleState::Enabled,
+            appearance,
+        ),
+        render_feature_switch(switch_state, is_setting_enabled, action, app),
+        appearance,
+        None,
+    )
+}
+
+fn render_feature_switch(
+    state_handle: SwitchStateHandle,
+    is_setting_enabled: bool,
+    toggle_action: CLIAgentsPageAction,
+    app: &AppContext,
+) -> Box<dyn Element> {
+    Appearance::as_ref(app)
+        .ui_builder()
+        .switch(state_handle)
+        .check(is_setting_enabled)
+        .build()
+        .on_click(move |ctx, _, _| {
+            ctx.dispatch_typed_action(toggle_action.clone());
+        })
+        .finish()
+}
+
+mod styles {
+    use warp_core::ui::appearance::Appearance;
+    use warp_core::ui::theme::Fill;
+    use warpui::{AppContext, SingletonEntity};
+
+    /// Negative margin applied to description text so it appears closer to the main settings option
+    /// text.
+    pub const DESCRIPTION_NEGATIVE_MARGIN_OFFSET: f32 = -12.;
+
+    /// The space between a description and the next toggle.
+    pub const DESCRIPTION_MARGIN_BOTTOM: f32 = 12.;
+
+    /// Margin to leave for switch toggle to the right of the description subtext.
+    pub const TOGGLE_WIDTH_MARGIN: f32 = 48.;
+
+    pub fn header_font_color(app: &AppContext) -> Fill {
+        let appearance = Appearance::as_ref(app);
+        appearance
+            .theme()
+            .main_text_color(appearance.theme().surface_2())
+    }
+
+    pub fn description_font_color(app: &AppContext) -> Fill {
+        let appearance = Appearance::as_ref(app);
+        appearance
+            .theme()
+            .sub_text_color(appearance.theme().surface_1())
     }
 }

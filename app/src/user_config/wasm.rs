@@ -5,7 +5,6 @@ use warpui::ModelContext;
 use crate::launch_configs::launch_config::LaunchConfig;
 use crate::tab_configs::{TabConfig, TabConfigError};
 use crate::themes::theme::WarpThemeConfig;
-use crate::workflows::workflow::Workflow;
 
 impl super::WarpConfig {
     pub fn new(_ctx: &mut ModelContext<Self>) -> Self {
@@ -16,18 +15,10 @@ impl super::WarpConfig {
     }
 }
 
-/// Loads all themes relative to the `workflow_path`.
+/// Loads all themes relative to the `theme_path`.
 pub fn load_theme_configs(_theme_path: &Path) -> WarpThemeConfig {
     // There's no local filesystem for wasm, so we'll never be able to retrieve
     // themes from any path.
-    Default::default()
-}
-
-/// Loads all workflows relative to the `workflow_path`.
-#[cfg_attr(target_family = "wasm", allow(dead_code))]
-pub fn load_workflows(_workflow_path: &Path) -> Vec<Workflow> {
-    // There's no local filesystem for wasm, so we'll never be able to retrieve
-    // workflows from any path.
     Default::default()
 }
 

@@ -899,6 +899,46 @@ pub(crate) fn is_common_git_config(path: &Path) -> bool {
     after_git.len() == 1 && after_git[0].as_os_str() == "config"
 }
 
+/// Components of jj's operation-heads directory, relative to the `.jj` directory. jj adds a file
+/// here for every new operation, so changes signal that the repository state changed.
+const JJ_OP_HEADS_COMPONENTS: [&str; 3] = ["repo", "op_heads", "heads"];
+
+pub fn is_jj_internal_path(path: &Path) -> bool {
+    jj_suffix_components(path).is_some()
+}
+
+/// Returns the components after the last `.jj` component of `path`.
+fn jj_suffix_components(path: &Path) -> Option<Vec<Component<'_>>> {
+    let components: Vec<_> = path.components().collect();
+    let jj_index = components.iter().rposition(|c| c.as_os_str() == ".jj")?;
+    Some(components[jj_index + 1..].to_vec())
+}
+
+/// Returns true for files in `.jj/repo/op_heads/heads/`.
+pub(crate) fn is_jj_op_heads_file(path: &Path) -> bool {
+    let Some(suffix) = jj_suffix_components(path) else {
+        return false;
+    };
+    suffix.len() == JJ_OP_HEADS_COMPONENTS.len() + 1
+        && suffix
+            .iter()
+            .zip(JJ_OP_HEADS_COMPONENTS)
+            .all(|(component, expected)| component.as_os_str() == expected)
+}
+
+/// Whether the watcher should descend into `path` inside `.jj/`: only along the way to the
+/// operation-heads directory.
+pub(crate) fn should_watch_directory_in_jj_path(path: &Path) -> bool {
+    let Some(suffix) = jj_suffix_components(path) else {
+        return true;
+    };
+    suffix.len() <= JJ_OP_HEADS_COMPONENTS.len()
+        && suffix
+            .iter()
+            .zip(JJ_OP_HEADS_COMPONENTS)
+            .all(|(component, expected)| component.as_os_str() == expected)
+}
+
 /// Returns true for `.git/HEAD` and `.git/refs/heads/*`
 /// (and their worktree equivalents `.git/worktrees/*/HEAD`, etc.).
 pub(crate) fn is_commit_related_git_file(path: &Path) -> bool {
@@ -1029,6 +1069,10 @@ pub fn should_watch_repo_directory(
         return should_watch_directory_in_git_path(path);
     }
 
+    if is_jj_internal_path(path) {
+        return should_watch_directory_in_jj_path(path);
+    }
+
     !matches_gitignores(
         path,
         path.is_dir(),
@@ -1087,7 +1131,10 @@ pub fn repo_watch_filter(
     };
     WatchFilter::with_filter(
         Arc::new(should_watch),
-        Arc::new(|path: &Path| !should_ignore_git_path(path)),
+        Arc::new(|path: &Path| {
+            !should_ignore_git_path(path)
+                && (!is_jj_internal_path(path) || is_jj_op_heads_file(path))
+        }),
     )
 }
 

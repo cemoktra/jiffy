@@ -11,7 +11,6 @@ use local_control::selection::select_instance;
 use serde::Serialize;
 use warp_core::channel::ChannelState;
 
-use crate::agent::OutputFormat;
 use crate::local_control::output::{write_json, write_json_line};
 use crate::local_control::selectors::{instance_selector, target_selector};
 use crate::local_control::{
@@ -21,6 +20,7 @@ use crate::local_control::{
     SurfaceSettingsCommand, SurfaceToggleCommand, TabActivateArgs, TabCloseArgs, TabColorCommand,
     TabCommand, TargetArgs, ThemeCommand, WindowCommand,
 };
+use crate::output_format::OutputFormat;
 
 pub(super) fn run_surface_command(
     command: SurfaceCommand,
@@ -55,28 +55,6 @@ pub(super) fn run_surface_command(
         SurfaceCommand::Keybindings(command) => {
             run_surface_open_command(command, ActionKind::SurfaceKeybindingsOpen, output_format)
         }
-        SurfaceCommand::WarpDrive(command) => match command {
-            SurfaceOpenToggleCommand::Open(args) => run_action_with_params(
-                args,
-                ActionKind::SurfaceWarpDriveOpen,
-                EmptyParams {},
-                output_format,
-            ),
-            SurfaceOpenToggleCommand::Toggle(args) => run_action_with_params(
-                args,
-                ActionKind::SurfaceWarpDriveToggle,
-                EmptyParams {},
-                output_format,
-            ),
-        },
-        SurfaceCommand::ResourceCenter(command) => run_surface_toggle_command(
-            command,
-            ActionKind::SurfaceResourceCenterToggle,
-            output_format,
-        ),
-        SurfaceCommand::AiAssistant(command) => {
-            run_surface_toggle_command(command, ActionKind::SurfaceAiAssistantToggle, output_format)
-        }
         SurfaceCommand::CodeReview(command) => match command {
             SurfaceOpenToggleCommand::Open(args) => run_action_with_params(
                 args,
@@ -99,11 +77,6 @@ pub(super) fn run_surface_command(
         SurfaceCommand::GlobalSearch(command) => {
             run_surface_open_command(command, ActionKind::SurfaceGlobalSearchOpen, output_format)
         }
-        SurfaceCommand::ConversationList(command) => run_surface_open_command(
-            command,
-            ActionKind::SurfaceConversationListOpen,
-            output_format,
-        ),
         SurfaceCommand::LeftPanel(command) => {
             run_surface_toggle_command(command, ActionKind::SurfaceLeftPanelToggle, output_format)
         }
@@ -124,23 +97,18 @@ pub(super) fn run_surface_command(
                 output_format,
             ),
         },
-        SurfaceCommand::AgentManagement(command) => run_surface_open_command(
-            command,
-            ActionKind::SurfaceAgentManagementOpen,
-            output_format,
-        ),
     }
 }
 
 fn render_human_readable(action: ActionKind, data: &serde_json::Value) -> String {
     match action {
         ActionKind::AppPing => format!(
-            "Warp instance {} is reachable (protocol version {})",
+            "Jiffy instance {} is reachable (protocol version {})",
             value_or_unknown(data, "instance_id"),
             value_or_unknown(data, "protocol_version")
         ),
         ActionKind::AppVersion => format!(
-            "Warp instance {}\nchannel: {}\napp_id: {}\nprotocol_version: {}",
+            "Jiffy instance {}\nchannel: {}\napp_id: {}\nprotocol_version: {}",
             value_or_unknown(data, "instance_id"),
             value_or_unknown(data, "channel"),
             value_or_unknown(data, "app_id"),
@@ -249,7 +217,7 @@ fn render_instance_list(
         OutputFormat::Ndjson => write_json_line(&output),
         OutputFormat::Pretty | OutputFormat::Text => {
             if output.instances.is_empty() {
-                println!("No running Warp instances with local control were found.");
+                println!("No running Jiffy instances with local control were found.");
                 return Ok(());
             }
             for instance in &output.instances {

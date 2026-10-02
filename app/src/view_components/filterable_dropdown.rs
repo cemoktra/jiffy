@@ -35,13 +35,6 @@ pub enum FilterableDropdownEvent {
     Close,
 }
 
-#[derive(Default, Debug, PartialEq)]
-pub enum FilterableDropdownOrientation {
-    Up,
-    #[default]
-    Down,
-}
-
 pub struct FilterableDropdown<A: DropdownItemAction = ()> {
     is_expanded: bool,
     disabled: bool,
@@ -53,7 +46,6 @@ pub struct FilterableDropdown<A: DropdownItemAction = ()> {
     self_handle: WeakViewHandle<Self>,
     selected_item: Option<MenuItem<DropdownAction>>,
     items: Vec<MenuItem<DropdownAction>>,
-    orientation: FilterableDropdownOrientation,
     static_menu_header: Option<&'static str>,
     button_variant: ButtonVariant,
     style_override: Option<UiComponentStyles>,
@@ -130,7 +122,6 @@ where
             main_axis_size: MainAxisSize::Max,
             selected_item: None,
             items: Default::default(),
-            orientation: Default::default(),
             static_menu_header: None,
             button_variant: ButtonVariant::Outlined,
             style_override: None,
@@ -147,45 +138,6 @@ where
         }
     }
 
-    /// See `Dropdown::set_use_overlay_layer`.
-    pub fn set_use_overlay_layer(&mut self, use_overlay_layer: bool, ctx: &mut ViewContext<Self>) {
-        self.use_overlay_layer = use_overlay_layer;
-        ctx.notify();
-    }
-
-    /// Override the top-bar height.
-    /// so callers (e.g. the orchestrate environment picker) that mix
-    /// `Dropdown` and `FilterableDropdown` in the same row can size them
-    /// identically.
-    pub fn set_top_bar_height(&mut self, height: f32, ctx: &mut ViewContext<Self>) {
-        self.top_bar_height = height;
-        ctx.notify();
-    }
-
-    /// Override the vertical margin applied above and below the dropdown's top
-    /// bar (default [`DROPDOWN_PADDING`]). Set to `0.` when the caller manages
-    /// its own spacing and needs the bar to align flush with sibling inputs.
-    pub fn set_vertical_margin(&mut self, vertical_margin: f32, ctx: &mut ViewContext<Self>) {
-        self.vertical_margin = vertical_margin;
-        ctx.notify();
-    }
-
-    pub fn set_menu_header_text_override<F>(&mut self, formatter: F)
-    where
-        F: Fn(&str) -> String + 'static,
-    {
-        self.menu_header_text_override = Some(Box::new(formatter));
-    }
-
-    /// Sets placeholder text shown (greyed) in the closed top bar when no item
-    /// is selected, and opts the dropdown into allowing an empty selection so
-    /// the placeholder is preserved rather than being replaced by the first
-    /// item after filtering.
-    pub fn set_placeholder(&mut self, placeholder: impl Into<String>, ctx: &mut ViewContext<Self>) {
-        self.placeholder = Some(placeholder.into());
-        ctx.notify();
-    }
-
     pub fn set_footer<F>(&mut self, builder: F, ctx: &mut ViewContext<Self>)
     where
         F: Fn(&AppContext) -> Box<dyn Element> + 'static,
@@ -199,36 +151,8 @@ where
         });
     }
 
-    pub fn clear_footer(&mut self, ctx: &mut ViewContext<Self>) {
-        self.has_pinned_footer = false;
-        self.dropdown.update(ctx, |menu, _| {
-            menu.clear_pinned_footer_builder();
-        });
-    }
-
-    /// Set the main_axis_size behavior for the dropdown header button.
-    ///
-    /// Default is MainAxisSize::Max, set to MainAxisSize::Min if you want to wrap the dropdown to
-    /// the text that's filling it.
-    pub fn set_main_axis_size(
-        &mut self,
-        main_axis_size: MainAxisSize,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        self.main_axis_size = main_axis_size;
-        ctx.notify();
-    }
-
     pub fn set_style(&mut self, style: UiComponentStyles) {
         self.style_override = Some(style);
-    }
-
-    pub fn set_button_variant(&mut self, button_variant: ButtonVariant) {
-        self.button_variant = button_variant;
-    }
-
-    pub fn set_orientation(&mut self, orientation: FilterableDropdownOrientation) {
-        self.orientation = orientation;
     }
 
     pub fn add_items(&mut self, items: Vec<DropdownItem<A>>, ctx: &mut ViewContext<Self>) {
@@ -257,26 +181,6 @@ where
             self.selected_item = None;
             ctx.notify();
         }
-    }
-
-    /// Set items from rich menu items (MenuItem). This preserves the rich menu items for
-    /// filtering and passes the filtered items to the internal dropdown.
-    ///
-    /// Rich menu items already carry erased [`DropdownAction`]s. The dropdown dispatches selected
-    /// item actions through normal action propagation, so callers should ensure each action is
-    /// handled by an appropriate view in the containing view hierarchy.
-    pub fn set_rich_items(
-        &mut self,
-        items: Vec<MenuItem<DropdownAction>>,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        self.items = items;
-        self.set_filtered_items(ctx);
-    }
-
-    /// The number of items in the dropdown.
-    pub fn len(&self) -> usize {
-        self.items.len()
     }
 
     #[expect(dead_code)]
@@ -343,22 +247,6 @@ where
             menu.set_width(width);
             ctx.notify();
         })
-    }
-
-    /// When enabled, the open menu sizes itself to the last rendered width of
-    /// the dropdown's top bar. This is useful for flexible dropdowns whose
-    /// trigger width is determined by parent layout rather than a fixed max.
-    pub fn set_match_menu_width_to_top_bar(
-        &mut self,
-        match_width: bool,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        self.match_menu_width_to_top_bar = match_width;
-        let top_bar_label = self.top_bar_label();
-        self.dropdown.update(ctx, |menu, _ctx| {
-            menu.set_width_match_position_id(match_width.then_some(top_bar_label));
-        });
-        ctx.notify();
     }
 
     pub fn set_disabled(&mut self, ctx: &mut ViewContext<Self>) {
@@ -766,32 +654,8 @@ where
         self.dropdown.as_ref(ctx).items_len()
     }
 
-    pub fn clear_filter(&mut self, ctx: &mut ViewContext<Self>) {
-        self.filter_editor.update(ctx, |editor, ctx| {
-            editor.clear_buffer(ctx);
-            ctx.notify();
-        });
-    }
-
     pub fn set_menu_header_to_static(&mut self, header: &'static str) {
         self.static_menu_header = Some(header);
-    }
-
-    /// Test-only: drive the filter input with `query` and re-filter the list,
-    /// mirroring what happens when a user types into the search field.
-    #[cfg(test)]
-    pub(crate) fn set_filter_query_for_test(&mut self, query: &str, ctx: &mut ViewContext<Self>) {
-        self.filter_editor.update(ctx, |editor, ctx| {
-            editor.select_all(ctx);
-            editor.insert_selected_text(query, ctx);
-        });
-        self.set_filtered_items(ctx);
-    }
-
-    /// Test-only: the number of items currently visible after filtering.
-    #[cfg(test)]
-    pub(crate) fn visible_items_len_for_test(&self, ctx: &AppContext) -> usize {
-        self.dropdown_items_len(ctx)
     }
 }
 
@@ -848,23 +712,13 @@ where
 
         let mut dropdown_stack = Stack::new().with_child(self.render_top_bar(appearance));
         if self.is_expanded {
-            let positioning = if self.orientation == FilterableDropdownOrientation::Down {
-                OffsetPositioning::offset_from_save_position_element(
-                    self.top_bar_label(),
-                    vec2f(0., 0.),
-                    PositionedElementOffsetBounds::WindowByPosition,
-                    PositionedElementAnchor::BottomLeft,
-                    ChildAnchor::TopLeft,
-                )
-            } else {
-                OffsetPositioning::offset_from_save_position_element(
-                    self.top_bar_label(),
-                    vec2f(0., 0.),
-                    PositionedElementOffsetBounds::WindowByPosition,
-                    PositionedElementAnchor::TopLeft,
-                    ChildAnchor::BottomLeft,
-                )
-            };
+            let positioning = OffsetPositioning::offset_from_save_position_element(
+                self.top_bar_label(),
+                vec2f(0., 0.),
+                PositionedElementOffsetBounds::WindowByPosition,
+                PositionedElementAnchor::BottomLeft,
+                ChildAnchor::TopLeft,
+            );
             if self.use_overlay_layer {
                 dropdown_stack.add_positioned_overlay_child(dropdown_menu, positioning);
             } else {

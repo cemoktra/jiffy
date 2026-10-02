@@ -16,14 +16,11 @@
 STAGE_DIR="$DIST_DIR/appimagepkg"
 APP_DIR="$DIST_DIR/AppDir"
 
-# Extract channel suffix from BINARY_NAME
 if [ "$ARTIFACT" = "cli" ]; then
-  CHANNEL_SUFFIX="${BINARY_NAME#oz}"
+  OPT_DIR="/opt/warpdotdev/warp-terminal${BINARY_NAME#oz}"
 else
-  CHANNEL_SUFFIX="${BINARY_NAME#warp}"
+  OPT_DIR="$APP_OPT_DIR"
 fi
-PACKAGE_NAME="warp-terminal$CHANNEL_SUFFIX"
-
 
 # Adding NO_STRIP to stop linuxdeploy from attempting to strip symbols
 # from binaries built on a different arch than the current symbol.
@@ -52,12 +49,7 @@ mkdir -p "$STAGE_DIR"
 
 # Populate the directory with the package contents, in the appropriate
 # locations.
-OPT_DIR="/opt/warpdotdev/$PACKAGE_NAME"
 source "$WORKSPACE_ROOT_DIR/script/linux/bundle_install" "$STAGE_DIR"
-
-# Modify the "Exec=" line in the .desktop file to use the name of the installed
-# binary and not our /usr/bin symlink (which doesn't exist in an AppImage).
-sed -i -E 's/Exec=warp-terminal/Exec=warp/' "$STAGE_DIR/usr/share/applications/$BUNDLE_ID.desktop"
 
 # Find all icon files from inside the package staging directory.
 ICON_FILES=( $(find "$STAGE_DIR/usr/share/icons" -name "*.png") )
@@ -74,7 +66,7 @@ rm -rf "$APP_DIR"
 cd "$OUT_DIR"
 echo "Running linuxdeploy to create the AppImage"
 export WARP_BINARY_NAME="$BINARY_NAME"
-export WARP_PACKAGE_NAME="$PACKAGE_NAME"
+export WARP_OPT_DIR="$OPT_DIR"
 export WARP_BUNDLED_RESOURCES_DIR="${STAGE_DIR}${OPT_DIR}/resources"
 export PATH="$WORKSPACE_ROOT_DIR/script/linux:$PATH"
 linuxdeploy \

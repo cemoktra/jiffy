@@ -9,25 +9,16 @@ use warpui::{AppContext, SingletonEntity};
 use warpui_extras::user_preferences;
 
 use super::app_icon::AppIconSettings;
-use super::app_installation_detection::UserAppInstallDetectionSettings;
-use super::cloud_preferences::CloudPreferencesSettings;
-use super::initializer::SettingsInitializer;
 use super::native_preference::NativePreferenceSettings;
 use super::{
-    AISettings, AccessibilitySettings, AliasExpansionSettings, AppEditorSettings,
-    BlockVisibilitySettings, ChangelogSettings, CodeSettings, DebugSettings, EmacsBindingsSettings,
-    FontSettings, FontSettingsChangedEvent, GPUSettings, InputBoxType, InputModeSettings,
-    InputSettings, LocalControlSettings, PaneSettings, SameLinePromptBlockSettings, ScrollSettings,
-    SelectionSettings, SharedObjectLimitBannerSettings, SshSettings, ThemeSettings,
-    TuiAutoupdateSettings, TuiThemeSettings, TuiVoiceSettings, TuiZeroStateSettings,
-    VimBannerSettings, WarpDrivePrivacySettings,
+    AccessibilitySettings, AliasExpansionSettings, AppEditorSettings, BlockVisibilitySettings,
+    CLIAgentSettings, CodeSettings, DebugSettings, EmacsBindingsSettings, FontSettings,
+    FontSettingsChangedEvent, GPUSettings, InputBoxType, InputModeSettings, InputSettings,
+    LocalControlSettings, NewSessionSettings, PaneSettings, SameLinePromptBlockSettings,
+    ScrollSettings, SelectionSettings, SshSettings, ThemeSettings, VimBannerSettings,
 };
-use crate::ai::cloud_agent_settings::CloudAgentSettings;
 use crate::appearance;
 use crate::banner::BannerState;
-use crate::drive::settings::WarpDriveSettings;
-use crate::resource_center::TipsCompleted;
-use crate::search::command_search::settings::CommandSearchSettings;
 use crate::terminal::BlockListSettings;
 use crate::terminal::alt_screen_reporting::AltScreenReporting;
 use crate::terminal::general_settings::GeneralSettings;
@@ -36,16 +27,13 @@ use crate::terminal::ligature_settings::LigatureSettings;
 use crate::terminal::safe_mode_settings::SafeModeSettings;
 use crate::terminal::session_settings::{SessionSettings, SessionSettingsChangedEvent};
 use crate::terminal::settings::TerminalSettings;
-use crate::terminal::shared_session::settings::SharedSessionSettings;
 use crate::terminal::warpify::settings::WarpifySettings;
 use crate::undo_close::UndoCloseSettings;
 use crate::window_settings::{WindowSettings, stage_legacy_background_backdrop};
-use crate::workflows::aliases::WorkflowAliases;
 use crate::workspace::tab_settings::TabSettings;
 
 pub struct UserDefaultsOnStartup {
     pub should_restore_session: bool,
-    pub tips_data: TipsCompleted,
     pub user_default_shell_unsupported_banner_state: BannerState,
     pub settings_file_error: Option<super::SettingsFileError>,
 }
@@ -67,28 +55,19 @@ pub fn register_all_settings(ctx: &mut AppContext) {
     SafeModeSettings::register(ctx);
     TerminalSettings::register(ctx);
     PaneSettings::register(ctx);
-    CommandSearchSettings::register(ctx);
     AliasExpansionSettings::register(ctx);
     CodeSettings::register(ctx);
     LigatureSettings::register(ctx);
     GPUSettings::register(ctx);
-    ChangelogSettings::register(ctx);
     GeneralSettings::register(ctx);
-    AISettings::register_and_subscribe_to_events(ctx);
-    CloudAgentSettings::register(ctx);
+    CLIAgentSettings::register_and_subscribe_to_events(ctx);
+    NewSessionSettings::register(ctx);
     ScrollSettings::register(ctx);
     SelectionSettings::register(ctx);
     InputModeSettings::register(ctx);
     ThemeSettings::register(ctx);
-    TuiAutoupdateSettings::register(ctx);
-    TuiThemeSettings::register(ctx);
-    TuiVoiceSettings::register(ctx);
-    TuiZeroStateSettings::register(ctx);
     AccessibilitySettings::register(ctx);
     NativePreferenceSettings::register(ctx);
-    CloudPreferencesSettings::register(ctx);
-    WarpDrivePrivacySettings::register(ctx);
-    UserAppInstallDetectionSettings::register(ctx);
     AppIconSettings::register(ctx);
     AppEditorSettings::register(ctx);
     InputSettings::register(ctx);
@@ -97,10 +76,6 @@ pub fn register_all_settings(ctx: &mut AppContext) {
     UndoCloseSettings::register(ctx);
     SshSettings::register(ctx);
     VimBannerSettings::register(ctx);
-    SharedObjectLimitBannerSettings::register(ctx);
-    SharedSessionSettings::register(ctx);
-    WarpDriveSettings::register(ctx);
-    WorkflowAliases::register(ctx);
     EmacsBindingsSettings::register(ctx);
     SameLinePromptBlockSettings::register(ctx);
     SemanticSelection::register(ctx);
@@ -124,8 +99,6 @@ pub fn init(
     startup_toml_parse_error: Option<user_preferences::Error>,
     ctx: &mut AppContext,
 ) -> UserDefaultsOnStartup {
-    ctx.add_singleton_model(|_| SettingsInitializer::new());
-
     register_all_settings(ctx);
 
     // One-time migration: copy public settings from the platform-native store
@@ -139,8 +112,6 @@ pub fn init(
     let use_thin_strokes = *FontSettings::as_ref(ctx).use_thin_strokes;
 
     let general_settings = GeneralSettings::as_ref(ctx);
-    let tips_features_used = general_settings.welcome_tips_features_used.clone();
-    let tips_skipped_or_completed = *general_settings.welcome_tips_skipped_or_completed;
     let user_default_shell_unsupported_banner_state =
         *general_settings.user_default_shell_unsupported_banner_state;
     let should_restore_session = *general_settings.restore_session;
@@ -177,7 +148,6 @@ pub fn init(
 
     let user_defaults_on_startup = UserDefaultsOnStartup {
         should_restore_session,
-        tips_data: TipsCompleted::new(tips_features_used, tips_skipped_or_completed),
         user_default_shell_unsupported_banner_state,
         settings_file_error,
     };

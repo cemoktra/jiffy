@@ -142,10 +142,6 @@ impl ActionSearcher for FuzzyActionSearcher {
             .all_bindings
             .values()
             .filter_map(move |binding| {
-                if is_excluded_binding(binding) {
-                    return None;
-                }
-
                 // Binding descriptions are almost always upper case. If a user searches with
                 // lowercase text, the fuzzy matcher will weight this match lower because the case
                 // between the search term and the description differ. As a result, we lowercase
@@ -187,7 +183,7 @@ mod full_text_searcher {
     use warp_search_core::define_search_schema;
     use warpui::keymap::{BindingId, DescriptionContext};
 
-    use crate::search::action::data_source::{ActionSearcher, SearcherAction, is_excluded_binding};
+    use crate::search::action::data_source::{ActionSearcher, SearcherAction};
     use crate::search::action::search_item::MatchedBinding;
     use crate::search::data_source::QueryResult;
     use crate::search::searcher::{
@@ -211,18 +207,15 @@ mod full_text_searcher {
 
     impl ActionSearcher for FullTextActionSearcher {
         fn search(&self, search_term: &str) -> anyhow::Result<Vec<QueryResult<SearcherAction>>> {
-            // If the search term is empty, return all bindings (except excluded ones)
+            // If the search term is empty, return all bindings
             if search_term.is_empty() {
                 return Ok(self
                     .all_bindings
                     .values()
-                    .filter_map(|binding| {
-                        if is_excluded_binding(binding) {
-                            return None;
-                        }
+                    .map(|binding| {
                         let matched_binding =
                             MatchedBinding::new(FuzzyMatchResult::no_match(), binding.clone());
-                        Some(QueryResult::from(matched_binding))
+                        QueryResult::from(matched_binding)
                     })
                     .collect());
             }
@@ -235,10 +228,6 @@ mod full_text_searcher {
                     let binding = self
                         .all_bindings
                         .get(&BindingId(match_result.values.id as usize))?;
-
-                    if is_excluded_binding(binding) {
-                        return None;
-                    }
 
                     let matched_indices = match_result.highlights.action;
                     Some(
@@ -301,9 +290,4 @@ mod full_text_searcher {
             }
         }
     }
-}
-
-// Context on why the search_drive action is excluded can be seen here: https://github.com/warpdotdev/warp-internal/pull/11705
-fn is_excluded_binding(binding: &CommandBinding) -> bool {
-    binding.name == *"workspace:search_drive"
 }

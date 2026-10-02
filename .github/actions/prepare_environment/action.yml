@@ -3,7 +3,7 @@ description: A shared set of setup steps to prepare the runtime environment.
 inputs:
   target_os:
     required: true
-    description: The target OS that we're building for ("macos", "linux", "windows", or "wasm").
+    description: The target OS that we're building for ("macos", "linux", or "windows").
   is_self_hosted:
     required: true
     description: Whether or not the workflow is running on a self-hosted runner.
@@ -15,8 +15,6 @@ inputs:
     description: If true, dependencies needed for building release artifacts will be installed (e.g., cargo-about for license generation).
   cache_key:
     description: If set, the cache key to use.  If unset, the cache key will be derived from the target OS.
-  ssh_key:
-    description: SSH private key used to clone the private warp-channel-config repository. Only consumed when running in warpdotdev/warp-internal.
 
 runs:
   using: composite
@@ -72,8 +70,6 @@ runs:
     - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       if: ${{ inputs.is_self_hosted != 'true' && !startsWith(runner.name, 'nsc-runner') }}
       with:
-        # Make sure x86_64-unknown-linux-gnu and wasm32-unknown-unknown builds
-        # don't share a cache, despite running on the same _host_ architecture.
         key: ${{ inputs.cache_key != '' && inputs.cache_key || inputs.target_os }}
         # Only cache runs on the master branch (caches on feature branches
         # are not reusable).
@@ -97,15 +93,6 @@ runs:
         cd "${{ steps.repo-root.outputs.path }}"
         ./script/install_cargo_binstall
 
-    # Load the SSH key needed to clone the private warp-channel-config repo. Only
-    # run in warpdotdev/warp-internal; elsewhere (mirrors, fork PRs) this is a no-op
-    # and install_channel_config falls back gracefully.
-    - name: Setup SSH keys for warp-channel-config
-      if: ${{ github.repository == 'warpdotdev/warp-internal' && inputs.ssh_key != '' }}
-      uses: webfactory/ssh-agent@e83874834305fe9a4a2997156cb26c5de65a8555 # v0.10.0
-      with:
-        ssh-private-key: ${{ inputs.ssh_key }}
-
     - uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1.7.0
       if: ${{ inputs.target_os == 'macos' && inputs.is_self_hosted != 'true' }}
       with:
@@ -116,9 +103,6 @@ runs:
       run: |
         cd "${{ steps.repo-root.outputs.path }}"
         if ${{ inputs.target_os == 'macos' }}; then
-          # Try to install warp-channel-config but don't complain if it cannot
-          # be installed.
-          ./script/install_channel_config || true
           if ${{ inputs.install_release_deps == 'true' }}; then
             ./script/install_cargo_release_deps
           else
@@ -142,11 +126,6 @@ runs:
           if ${{ inputs.install_release_deps == 'true' }}; then
             ./script/install_cargo_release_deps
           fi
-        elif ${{ inputs.target_os == 'wasm' }}; then
-          # Update the apt cache before installing dependencies - it can be slow, so the install scripts
-          # don't do it (to avoid doing it more than once).
-          sudo apt update -y
-          ./script/wasm/install_build_deps
         else
           echo "::error::Missing logic to install build dependencies for OS \"${{ inputs.target_os }}\""
           exit 1

@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-use ai::index::Symbol;
+use agent_context::Symbol;
 
 #[cfg(test)]
 use super::*;

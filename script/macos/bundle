@@ -214,7 +214,7 @@ TARGET_ARCH=""
 DMG_NAME_SUFFIX=""
 # By default we build dev bundles.
 RELEASE_CHANNEL="dev"
-FEATURES="release_bundle,cocoa_sentry,extern_plist"
+FEATURES="release_bundle,extern_plist"
 REGISTER_SERVICES=true
 DEBUG=false
 ARTIFACT="app"
@@ -392,25 +392,15 @@ if [[ $RELEASE_CHANNEL = "local" ]]; then
     BUNDLE_ID="dev.warp.Warp-Local"
     WARP_APP_NAME="WarpLocal"
     WARP_SCHEME_NAME="warplocal"
-    FEATURES="$FEATURES,agent_mode_debug"
-    # For local builds, use different versions of our bundled frameworks (e.g.:
-    # Sentry).  This needs to be exported so it can be referenced by
-    # app/build.rs later, while running `cargo bundle`.
-    export FRAMEWORK_OVERRIDE="dev"
 elif [[ $RELEASE_CHANNEL = "dev" ]]; then
     WARP_BIN="dev"
     BUNDLE_ID="dev.warp.Warp-Dev"
     WARP_APP_NAME="WarpDev"
     WARP_SCHEME_NAME="warpdev"
-    FEATURES="$FEATURES,agent_mode_debug"
     # Enable heap usage tracking & profiling using jemalloc through pprof.
     FEATURES="$FEATURES,jemalloc_pprof,heap_usage_tracking"
     # Enable the Warp Control CLI wrapper for local scripting/automation.
     FEATURES="$FEATURES,warp_control_cli"
-    # For dev builds, use different versions of our bundled frameworks (e.g.:
-    # Sentry).  This needs to be exported so it can be referenced by
-    # app/build.rs later, while running `cargo bundle`.
-    export FRAMEWORK_OVERRIDE="dev"
     export HANDLE_MARKDOWN=1
 elif [[ $RELEASE_CHANNEL = "preview" ]]; then
     WARP_BIN="preview"
@@ -428,12 +418,10 @@ elif [[ $RELEASE_CHANNEL = "stable" ]]; then
     # Enable heap usage tracking & profiling using jemalloc through pprof.
     FEATURES="$FEATURES,jemalloc_pprof,heap_usage_tracking"
 elif [[ $RELEASE_CHANNEL = "oss" ]]; then
-    WARP_BIN="warp-oss"
-    BUNDLE_ID="dev.warp.WarpOss"
-    WARP_APP_NAME="WarpOss"
-    WARP_SCHEME_NAME="warposs"
-    # The OSS channel does not ship Sentry, so drop the cocoa_sentry feature
-    # (which would otherwise pull in the Sentry framework dependency).
+    WARP_BIN="jiffy"
+    BUNDLE_ID="dev.jiffy.Jiffy"
+    WARP_APP_NAME="Jiffy"
+    WARP_SCHEME_NAME="jiffy"
     FEATURES="release_bundle,extern_plist"
 fi
 
@@ -512,12 +500,8 @@ elif [[ "$ARTIFACT" == tui ]]; then
     *) WARP_BIN="warp-tui-$RELEASE_CHANNEL" ;;
   esac
   WARP_TUI_FEATURES="release_bundle,standalone,voice_input"
-  if [[ "$RELEASE_CHANNEL" != "oss" ]]; then
-    WARP_TUI_FEATURES="$WARP_TUI_FEATURES,crash_reporting"
-  fi
 elif [[ "$ARTIFACT" == app ]]; then
-  # All channels ship the v3 classifier and v2 heuristic.
-  FEATURES="$FEATURES,gui,nld_classifier_v3,nld_heuristic_v2"
+  FEATURES="$FEATURES,gui"
 fi
 
 # A universal binary always has a native slice, so it is unaffected by the
@@ -722,7 +706,7 @@ if [[ "$ARTIFACT" == "app" ]]; then
   if [[ $RELEASE_CHANNEL = "stable" ]]; then
     CLI_SCRIPT_PATH="$BUNDLED_RESOURCES_DIR/bin/oz"
   elif [[ $RELEASE_CHANNEL = "oss" ]]; then
-    CLI_SCRIPT_PATH="$BUNDLED_RESOURCES_DIR/bin/warp-oss"
+    CLI_SCRIPT_PATH="$BUNDLED_RESOURCES_DIR/bin/jiffy"
   else
     CLI_SCRIPT_PATH="$BUNDLED_RESOURCES_DIR/bin/oz-$RELEASE_CHANNEL"
   fi

@@ -4,30 +4,25 @@
 //! - per-file invalidation
 //! - full diff load
 //! - metadata load
-//! - remote-daemon snapshot/error responses
+//!
 //! The same pool of git / filesystem failures can surface in any of these operations,
 //! so a single classifier keeps the code DRY and ensures every site reports failures the same way.
 //!
 //! A [`DiffStateError`] pairs a sanitized [`DiffStateErrorKind`] with the raw
-//! underlying error, but only the sanitized half is ever emitted off-device:
+//! underlying error:
 //! - [`std::fmt::Display`] renders only the sanitized `kind`, so passing this
-//!   through [`warp_errors::report_error!`] or code-review telemetry keeps logs,
-//!   Sentry, and analytics free of repo paths, refs, command output, or
-//!   secrets. The raw cause is never exposed via `Display` or `source`.
+//!   through [`warp_errors::report_error!`] keeps logs free of repo paths, refs,
+//!   command output, or secrets. The raw cause is never exposed via `Display` or `source`.
 //!
 //! For [`DiffStateErrorKind::Unknown`] the raw cause is additionally consulted
 //! via [`AnyhowErrorExt::is_actionable`] so registered non-actionable causes
-//! (transient I/O, network, etc.) auto-demote it to a warning instead of a
-//! Sentry capture.
-//!
-//! Use the operation tag [`super::DiffOperation`] alongside this error in telemetry to distinguish where a given failure originated.
+//! (transient I/O, network, etc.) auto-demote it to a warning.
 
 use warp_core::sync_queue::IsTransientError;
 use warp_errors::{AnyhowErrorExt, ErrorExt};
 
 /// Sanitized classification of a [`DiffStateError`]. Every variant has a
-/// fixed, PII-free [`std::fmt::Display`] string that is safe to send to logs
-/// and Sentry.
+/// fixed, PII-free [`std::fmt::Display`] string that is safe to write to logs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub(crate) enum DiffStateErrorKind {
     // ── Git environment / repository state ──────────────────────────────
@@ -60,15 +55,9 @@ pub(crate) enum DiffStateErrorKind {
     #[error("repository path is invalid")]
     RepositoryPathInvalid,
 
-    // ── Remote daemon application-level outcomes ────────────────────────
-    /// The remote daemon reported `DiffState::Loaded` but no `GitDiffData`
-    /// accompanied it. Only constructed by `RemoteDiffStateModel`.
-    #[error("server returned empty diff data")]
-    EmptyDiffData,
-
     // ── Unclassified ────────────────────────────────────────────────────
     /// Unrecognized error. Add a dedicated variant once a new pattern is
-    /// identified from the raw text recorded in telemetry.
+    /// identified from the raw error text.
     #[error("unknown diff state error")]
     Unknown,
 }
@@ -115,15 +104,14 @@ impl DiffStateErrorKind {
 }
 
 /// A diff-state failure: a sanitized [`DiffStateErrorKind`] paired with the
-/// raw underlying error. See the module docs for how the two halves are
-/// routed to telemetry vs. logs / Sentry.
+/// raw underlying error. See the module docs for how the two halves are used.
 #[derive(Debug, thiserror::Error)]
 #[error("{kind}")]
 pub(crate) struct DiffStateError {
     kind: DiffStateErrorKind,
     /// Raw underlying error. Consulted only for [`DiffStateErrorKind::Unknown`]
-    /// actionability and never exposed via `Display`, `source`, or telemetry,
-    /// so logs, Sentry, and analytics only ever see the sanitized `kind`.
+    /// actionability and never exposed via `Display` or `source`, so logs only ever see the
+    /// sanitized `kind`.
     cause: anyhow::Error,
 }
 
@@ -137,14 +125,6 @@ impl DiffStateError {
             kind: DiffStateErrorKind::classify(message).unwrap_or(DiffStateErrorKind::Unknown),
             cause: anyhow::anyhow!("{message}"),
         }
-    }
-
-    /// Build the [`DiffStateErrorKind::EmptyDiffData`] error, reported when the
-    /// remote daemon claims `DiffState::Loaded` but sends no diff data.
-    pub(crate) fn empty_diff_data() -> Self {
-        let kind = DiffStateErrorKind::EmptyDiffData;
-        let cause = anyhow::anyhow!("{kind}");
-        Self { kind, cause }
     }
 
     /// Logs the raw underlying error locally, then reports the sanitized
@@ -167,13 +147,12 @@ impl From<anyhow::Error> for DiffStateError {
 impl ErrorExt for DiffStateError {
     fn is_actionable(&self) -> bool {
         match self.kind {
-            // Caller / engineering bugs — surface to Sentry at error level.
+            // Caller / engineering bugs — log at error level.
             DiffStateErrorKind::InvalidEmptyPathspec
-            | DiffStateErrorKind::InvalidGitStatusOutput
-            | DiffStateErrorKind::EmptyDiffData => true,
+            | DiffStateErrorKind::InvalidGitStatusOutput => true,
             // Unknown errors defer to the anyhow chain so registered
             // transient/non-actionable causes (network, transient I/O, etc.)
-            // log at warn level instead of paging us via Sentry.
+            // log at warn level.
             DiffStateErrorKind::Unknown => self.cause.is_actionable(),
             // User environment failures — not our bug; log as warning.
             DiffStateErrorKind::GitRejectedRepositoryOwnership
@@ -202,7 +181,6 @@ impl IsTransientError for DiffStateError {
             DiffStateErrorKind::RepositoryPathNotAccessible
             | DiffStateErrorKind::GitRevisionUnavailable
             | DiffStateErrorKind::GitHeadTreeInvalid
-            | DiffStateErrorKind::EmptyDiffData
             | DiffStateErrorKind::Unknown => true,
             // Caller bugs, invalid inputs, missing tools, and user-actionable
             // environment setup issues won't resolve by retrying the same

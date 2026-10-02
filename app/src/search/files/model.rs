@@ -681,6 +681,18 @@ impl FileSearchModel {
     ) -> Result<HashSet<String>, std::io::Error> {
         let mut changed_files = HashSet::new();
 
+        if crate::util::jj::is_jj_workspace(repo_path) {
+            // A ranking hint only, so read the last snapshot rather than snapshotting here.
+            if let Ok(output) = warp_util::jj::run_jj_command_blocking(
+                repo_path,
+                &["diff", "-r", "@", "--name-only"],
+                warp_util::jj::JjSnapshot::Skip,
+            ) {
+                changed_files.extend(output.lines().map(str::to_string));
+            }
+            return Ok(changed_files);
+        }
+
         log::debug!("[GIT OPERATION] model.rs get_git_changed_files git status --porcelain");
         // Run `git status --porcelain` to get changed files
         let output = Command::new("git")

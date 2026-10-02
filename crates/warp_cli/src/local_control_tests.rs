@@ -13,7 +13,7 @@ fn parses_typed_create_and_setting_list_params() {
         "tab",
         "create",
         "--type",
-        "agent",
+        "default",
         "--session",
         "session_1",
     ])
@@ -21,7 +21,7 @@ fn parses_typed_create_and_setting_list_params() {
     let ControlCommand::Tab(TabCommand::Create(args)) = args.command else {
         panic!("expected tab create command");
     };
-    assert_eq!(args.tab_type, Some(CliTabType::Agent));
+    assert_eq!(args.tab_type, Some(CliTabType::Default));
     assert_eq!(args.target.session.as_deref(), Some("session_1"));
 
     let err = ControlArgs::try_parse_from(["warpctrl", "tab", "create", "--shell", "zsh"])
@@ -259,8 +259,7 @@ fn generated_bash_completions_include_mutating_command_groups() {
         generate_completion_string(Shell::Bash).expect("bash completions render to UTF-8");
     assert!(completions.contains("surface"));
     assert!(completions.contains("command-palette"));
-    assert!(completions.contains("warp-drive"));
-    assert!(completions.contains("resource-center"));
+    assert!(completions.contains("code-review"));
     assert!(completions.contains("activate"));
     assert!(completions.contains("split"));
     assert!(!completions.contains("history"));
@@ -269,7 +268,7 @@ fn generated_bash_completions_include_mutating_command_groups() {
 
 #[test]
 fn structured_error_output_uses_stable_error_code() {
-    let error = ControlError::new(ErrorCode::NoInstance, "no local Warp control instances");
+    let error = ControlError::new(ErrorCode::NoInstance, "no local Jiffy control instances");
     let value = serde_json::to_value(ErrorSummary {
         ok: false,
         error: &error,
@@ -279,7 +278,7 @@ fn structured_error_output_uses_stable_error_code() {
     assert_eq!(value["error"]["code"], json!("no_instance"));
     assert_eq!(
         value["error"]["message"],
-        json!("no local Warp control instances")
+        json!("no local Jiffy control instances")
     );
 }
 
@@ -522,22 +521,6 @@ fn retained_action_examples() -> Vec<(ActionKind, Vec<&'static str>)> {
             vec!["warpctrl", "surface", "keybindings", "open"],
         ),
         (
-            ActionKind::SurfaceWarpDriveOpen,
-            vec!["warpctrl", "surface", "warp-drive", "open"],
-        ),
-        (
-            ActionKind::SurfaceWarpDriveToggle,
-            vec!["warpctrl", "surface", "warp-drive", "toggle"],
-        ),
-        (
-            ActionKind::SurfaceResourceCenterToggle,
-            vec!["warpctrl", "surface", "resource-center", "toggle"],
-        ),
-        (
-            ActionKind::SurfaceAiAssistantToggle,
-            vec!["warpctrl", "surface", "ai-assistant", "toggle"],
-        ),
-        (
             ActionKind::SurfaceCodeReviewOpen,
             vec!["warpctrl", "surface", "code-review", "open"],
         ),
@@ -554,10 +537,6 @@ fn retained_action_examples() -> Vec<(ActionKind, Vec<&'static str>)> {
             vec!["warpctrl", "surface", "global-search", "open"],
         ),
         (
-            ActionKind::SurfaceConversationListOpen,
-            vec!["warpctrl", "surface", "conversation-list", "open"],
-        ),
-        (
             ActionKind::SurfaceLeftPanelToggle,
             vec!["warpctrl", "surface", "left-panel", "toggle"],
         ),
@@ -572,10 +551,6 @@ fn retained_action_examples() -> Vec<(ActionKind, Vec<&'static str>)> {
         (
             ActionKind::SurfaceVerticalTabsToggle,
             vec!["warpctrl", "surface", "vertical-tabs", "toggle"],
-        ),
-        (
-            ActionKind::SurfaceAgentManagementOpen,
-            vec!["warpctrl", "surface", "agent-management", "open"],
         ),
         (
             ActionKind::FileOpen,
@@ -697,16 +672,6 @@ fn parsed_action_kind(command: &ControlCommand) -> Option<ActionKind> {
             SurfaceCommand::Keybindings(command) => match command {
                 SurfaceOpenCommand::Open(_) => Some(ActionKind::SurfaceKeybindingsOpen),
             },
-            SurfaceCommand::WarpDrive(command) => match command {
-                SurfaceOpenToggleCommand::Open(_) => Some(ActionKind::SurfaceWarpDriveOpen),
-                SurfaceOpenToggleCommand::Toggle(_) => Some(ActionKind::SurfaceWarpDriveToggle),
-            },
-            SurfaceCommand::ResourceCenter(command) => match command {
-                SurfaceToggleCommand::Toggle(_) => Some(ActionKind::SurfaceResourceCenterToggle),
-            },
-            SurfaceCommand::AiAssistant(command) => match command {
-                SurfaceToggleCommand::Toggle(_) => Some(ActionKind::SurfaceAiAssistantToggle),
-            },
             SurfaceCommand::CodeReview(command) => match command {
                 SurfaceOpenToggleCommand::Open(_) => Some(ActionKind::SurfaceCodeReviewOpen),
                 SurfaceOpenToggleCommand::Toggle(_) => Some(ActionKind::SurfaceCodeReviewToggle),
@@ -717,9 +682,6 @@ fn parsed_action_kind(command: &ControlCommand) -> Option<ActionKind> {
             SurfaceCommand::GlobalSearch(command) => match command {
                 SurfaceOpenCommand::Open(_) => Some(ActionKind::SurfaceGlobalSearchOpen),
             },
-            SurfaceCommand::ConversationList(command) => match command {
-                SurfaceOpenCommand::Open(_) => Some(ActionKind::SurfaceConversationListOpen),
-            },
             SurfaceCommand::LeftPanel(command) => match command {
                 SurfaceToggleCommand::Toggle(_) => Some(ActionKind::SurfaceLeftPanelToggle),
             },
@@ -729,9 +691,6 @@ fn parsed_action_kind(command: &ControlCommand) -> Option<ActionKind> {
             SurfaceCommand::VerticalTabs(command) => match command {
                 SurfaceOpenToggleCommand::Open(_) => Some(ActionKind::SurfaceVerticalTabsOpen),
                 SurfaceOpenToggleCommand::Toggle(_) => Some(ActionKind::SurfaceVerticalTabsToggle),
-            },
-            SurfaceCommand::AgentManagement(command) => match command {
-                SurfaceOpenCommand::Open(_) => Some(ActionKind::SurfaceAgentManagementOpen),
             },
         },
         ControlCommand::Completions { .. } => None,

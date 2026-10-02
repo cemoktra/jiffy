@@ -1,8 +1,6 @@
 use std::collections::HashSet;
 use std::ops::Range;
-use std::sync::Arc;
 
-use chrono::Utc;
 use futures::prelude::*;
 use itertools::Itertools;
 use markdown_parser::markdown_parser::RUNNABLE_BLOCK_MARKDOWN_LANG;
@@ -32,9 +30,6 @@ use warpui::{
 use super::super::rich_text_styles;
 use super::NotebooksEditorModel;
 use crate::appearance::Appearance;
-use crate::auth::AuthStateProvider;
-use crate::cloud_object::model::persistence::CloudModel;
-use crate::cloud_object::{Owner, Revision, ServerMetadata, ServerPermissions, ServerWorkflow};
 use crate::editor::InteractionState;
 use crate::notebooks::editor::keys::NotebookKeybindings;
 use crate::notebooks::editor::model::DEBOUNCED_RESIZE_PERIOD;
@@ -43,17 +38,11 @@ use crate::notebooks::editor::view::{RichTextEditorConfig, RichTextEditorView};
 use crate::notebooks::file::MarkdownDisplayMode;
 use crate::notebooks::link::{NotebookLinks, SessionSource};
 use crate::search::files::model::FileSearchModel;
-use crate::server::ids::{ServerId, SyncId};
-use crate::server::server_api::team::MockTeamClient;
-use crate::server::server_api::workspace::MockWorkspaceClient;
 use crate::settings::FontSettings;
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
-use crate::terminal::keys::TerminalKeybindings;
 use crate::test_util::settings::initialize_settings_for_tests;
-use crate::workflows::workflow::Workflow;
-use crate::workflows::{CloudWorkflow, CloudWorkflowModel, WorkflowId};
 use crate::workspace::ActiveSession;
-use crate::{GlobalResourceHandles, GlobalResourceHandlesProvider, UserWorkspaces};
+use crate::{GlobalResourceHandles, GlobalResourceHandlesProvider};
 
 /// Container for a [`RichTextEditorView`] in unit tests.
 struct TestView {
@@ -80,12 +69,8 @@ impl TypedActionView for TestView {
 
 /// Create a new RTE model with the given Markdown content. Also creates a [`RichTextEditorView`] (and adds relevant dependencies) since that
 /// window_id is needed for the model.
-fn model_from_markdown(
-    markdown: &str,
-    app: &mut App,
-    should_initialize_cloud_model: bool,
-) -> ModelHandle<NotebooksEditorModel> {
-    let window = setup_editor_window(app, should_initialize_cloud_model);
+fn model_from_markdown(markdown: &str, app: &mut App) -> ModelHandle<NotebooksEditorModel> {
+    let window = setup_editor_window(app);
     app.add_model(|ctx| {
         let styles = rich_text_styles(Appearance::as_ref(ctx), FontSettings::as_ref(ctx));
         let mut model = NotebooksEditorModel::new(styles, window, ctx);
@@ -97,7 +82,7 @@ fn model_from_markdown(
 
 /// Register the singletons and host window that a [`NotebooksEditorModel`] depends on, returning
 /// the window a model should bind to.
-fn setup_editor_window(app: &mut App, should_initialize_cloud_model: bool) -> warpui::WindowId {
+fn setup_editor_window(app: &mut App) -> warpui::WindowId {
     let global_resources = GlobalResourceHandles::mock(app);
     app.add_singleton_model(|_| GlobalResourceHandlesProvider::new(global_resources));
     app.add_singleton_model(|_| ActiveSession::default());
@@ -107,12 +92,6 @@ fn setup_editor_window(app: &mut App, should_initialize_cloud_model: bool) -> wa
     app.add_singleton_model(repo_metadata::RepoMetadataModel::new);
     app.add_singleton_model(FileSearchModel::new);
     app.add_singleton_model(NotebookKeybindings::new);
-    app.add_singleton_model(TerminalKeybindings::new);
-
-    // In some tests, we need to initialize CloudModel first to mock some server data. In those cases, avoid mocking it a second time.
-    if should_initialize_cloud_model {
-        app.add_singleton_model(CloudModel::mock);
-    }
 
     let (window, _) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
         let window_id = ctx.window_id();
@@ -137,19 +116,6 @@ fn setup_editor_window(app: &mut App, should_initialize_cloud_model: bool) -> wa
 
 fn initialize_deps(app: &mut App) {
     app.add_singleton_model(|_| Appearance::mock());
-    let team_client_mock = Arc::new(MockTeamClient::new());
-    let workspace_client_mock = Arc::new(MockWorkspaceClient::new());
-    app.add_singleton_model(|ctx| {
-        UserWorkspaces::mock(
-            team_client_mock.clone(),
-            workspace_client_mock.clone(),
-            vec![],
-            ctx,
-        )
-    });
-    app.add_singleton_model(|_| AuthStateProvider::new_for_test());
-    #[cfg(feature = "voice_input")]
-    app.add_singleton_model(voice_input::VoiceInput::new);
     initialize_settings_for_tests(app);
 }
 
@@ -220,7 +186,7 @@ fn test_edit_command_submodel() {
     App::test((), |mut app| async move {
         initialize_deps(&mut app);
 
-        let model_handle = model_from_markdown("Hello\n```\necho test\n```\nworld", &mut app, true);
+        let model_handle = model_from_markdown("Hello\n```\necho test\n```\nworld", &mut app);
         layout_model(&mut app, &model_handle).await;
         let command_model = command_models(&model_handle, &mut app)
             .into_iter()
@@ -283,7 +249,7 @@ fn test_delete_command_submodel() {
     App::test((), |mut app| async move {
         initialize_deps(&mut app);
 
-        let model_handle = model_from_markdown("Hello\n```\necho test\n```\nworld", &mut app, true);
+        let model_handle = model_from_markdown("Hello\n```\necho test\n```\nworld", &mut app);
         layout_model(&mut app, &model_handle).await;
         assert_eq!(command_models(&model_handle, &mut app).len(), 1);
 
@@ -307,7 +273,7 @@ fn test_replace_command_submodel() {
     App::test((), |mut app| async move {
         initialize_deps(&mut app);
 
-        let model_handle = model_from_markdown("Hello\n```\necho test\n```\nworld", &mut app, true);
+        let model_handle = model_from_markdown("Hello\n```\necho test\n```\nworld", &mut app);
         layout_model(&mut app, &model_handle).await;
         let command1 = command_models(&model_handle, &mut app)
             .into_iter()
@@ -381,7 +347,7 @@ fn test_replace_command_submodel() {
 fn test_inline_markdown() {
     App::test((), |mut app| async move {
         initialize_deps(&mut app);
-        let editor = model_from_markdown("First **bold", &mut app, true);
+        let editor = model_from_markdown("First **bold", &mut app);
 
         editor.update(&mut app, |editor, ctx| {
             editor.user_insert("*", ctx);
@@ -458,7 +424,7 @@ fn test_inline_markdown() {
 fn test_inline_markdown_italic_underscores() {
     App::test((), |mut app| async move {
         initialize_deps(&mut app);
-        let editor = model_from_markdown("Start _italic", &mut app, true);
+        let editor = model_from_markdown("Start _italic", &mut app);
 
         // Typing the trailing `_` in `_italic_` coerces to italic.
         editor.update(&mut app, |editor, ctx| {
@@ -478,7 +444,7 @@ fn test_inline_markdown_italic_underscores() {
 fn test_inline_markdown_intra_word_underscore_ignored() {
     App::test((), |mut app| async move {
         initialize_deps(&mut app);
-        let editor = model_from_markdown("foo_bar", &mut app, true);
+        let editor = model_from_markdown("foo_bar", &mut app);
 
         // Intra-word underscores should not be coerced to italic.
         editor.update(&mut app, |editor, ctx| {
@@ -494,7 +460,7 @@ fn test_inline_markdown_intra_word_underscore_ignored() {
 fn test_inline_markdown_double_leading_underscore_not_italic() {
     App::test((), |mut app| async move {
         initialize_deps(&mut app);
-        let editor = model_from_markdown("__w", &mut app, true);
+        let editor = model_from_markdown("__w", &mut app);
 
         // Typing a trailing `_` after `__w` should NOT coerce to italic,
         // because the opening delimiter is `__` (double-underscore), not `_`.
@@ -511,7 +477,7 @@ fn test_inline_markdown_double_leading_underscore_not_italic() {
 fn test_find_matching_header_simple() {
     App::test((), |mut app| async move {
         initialize_deps(&mut app);
-        let editor = model_from_markdown("- [Goal](#goal)\n\n## Goal\nBody", &mut app, true);
+        let editor = model_from_markdown("- [Goal](#goal)\n\n## Goal\nBody", &mut app);
 
         editor.read(&app, |editor, ctx| {
             let range = editor
@@ -532,7 +498,7 @@ fn test_find_matching_header_simple() {
 fn test_find_matching_header_case_insensitive() {
     App::test((), |mut app| async move {
         initialize_deps(&mut app);
-        let editor = model_from_markdown("## My Bold Goal\nBody", &mut app, true);
+        let editor = model_from_markdown("## My Bold Goal\nBody", &mut app);
 
         editor.read(&app, |editor, ctx| {
             assert!(editor.find_matching_header("#my bold goal", ctx).is_some());
@@ -545,7 +511,7 @@ fn test_find_matching_header_case_insensitive() {
 fn test_find_matching_header_percent_decoded() {
     App::test((), |mut app| async move {
         initialize_deps(&mut app);
-        let editor = model_from_markdown("## Hello World\nBody", &mut app, true);
+        let editor = model_from_markdown("## Hello World\nBody", &mut app);
 
         editor.read(&app, |editor, ctx| {
             assert!(editor.find_matching_header("#Hello%20World", ctx).is_some());
@@ -557,7 +523,7 @@ fn test_find_matching_header_percent_decoded() {
 fn test_find_matching_header_returns_first_match() {
     App::test((), |mut app| async move {
         initialize_deps(&mut app);
-        let editor = model_from_markdown("## Goal\nFirst\n\n## Goal\nSecond", &mut app, true);
+        let editor = model_from_markdown("## Goal\nFirst\n\n## Goal\nSecond", &mut app);
 
         editor.read(&app, |editor, ctx| {
             let range = editor
@@ -577,7 +543,7 @@ fn test_find_matching_header_returns_first_match() {
 fn test_find_matching_header_missing_returns_none() {
     App::test((), |mut app| async move {
         initialize_deps(&mut app);
-        let editor = model_from_markdown("## Goal\nBody", &mut app, true);
+        let editor = model_from_markdown("## Goal\nBody", &mut app);
 
         editor.read(&app, |editor, ctx| {
             assert!(editor.find_matching_header("#nonexistent", ctx).is_none());
@@ -591,7 +557,7 @@ fn test_find_matching_header_missing_returns_none() {
 fn test_cursor_bias_editing() {
     App::test((), |mut app| async move {
         initialize_deps(&mut app);
-        let editor = model_from_markdown("First`inline", &mut app, true);
+        let editor = model_from_markdown("First`inline", &mut app);
 
         editor.update(&mut app, |editor, ctx| {
             editor.user_insert("`", ctx);
@@ -660,7 +626,7 @@ fn test_cursor_bias_editing() {
 fn test_markdown_shortcuts_require_single_cursor() {
     App::test((), |mut app| async move {
         initialize_deps(&mut app);
-        let editor = model_from_markdown("First *line", &mut app, true);
+        let editor = model_from_markdown("First *line", &mut app);
 
         editor.update(&mut app, |editor, ctx| {
             // Type a Markdown trigger with a text selection.
@@ -676,7 +642,7 @@ fn test_markdown_shortcuts_require_single_cursor() {
 fn test_plain_text_pasting() {
     App::test((), |mut app| async move {
         initialize_deps(&mut app);
-        let editor = model_from_markdown("First text\nSecond line", &mut app, true);
+        let editor = model_from_markdown("First text\nSecond line", &mut app);
         let clipboard_content = "text";
 
         layout_model(&mut app, &editor).await;
@@ -709,7 +675,7 @@ A --> B
 More text";
         let original_char_count = markdown.chars().count();
 
-        let model_handle = model_from_markdown(markdown, &mut app, true);
+        let model_handle = model_from_markdown(markdown, &mut app);
         model_handle.update(&mut app, |model, ctx| {
             model.set_interaction_state(InteractionState::Editable, ctx);
         });
@@ -794,7 +760,7 @@ More text";
 fn test_pasting_link_on_selected_text() {
     App::test((), |mut app| async move {
         initialize_deps(&mut app);
-        let editor = model_from_markdown("First text\nSecond line", &mut app, true);
+        let editor = model_from_markdown("First text\nSecond line", &mut app);
         let clipboard_content = "https://warp.dev";
 
         layout_model(&mut app, &editor).await;
@@ -830,7 +796,6 @@ More text
 echo command
 ```"#,
             &mut app,
-            true,
         );
         // Wait for layout and syntax highlighting, to reduce flakiness.
         finish_highlighting(&model_handle, 2, &mut Default::default(), &mut app).await;
@@ -859,11 +824,8 @@ echo command
 fn test_markdown_block_conversion() {
     App::test((), |mut app| async move {
         initialize_deps(&mut app);
-        let editor = model_from_markdown(
-            "This is a list:\n1. First\n2. Second\n3. Third",
-            &mut app,
-            true,
-        );
+        let editor =
+            model_from_markdown("This is a list:\n1. First\n2. Second\n3. Third", &mut app);
 
         editor.update(&mut app, |editor, ctx| {
             assert_eq!(
@@ -893,11 +855,8 @@ fn test_markdown_block_conversion() {
 fn test_conversion_preserves_indent_level() {
     App::test((), |mut app| async move {
         initialize_deps(&mut app);
-        let editor = model_from_markdown(
-            "1. Level 1\n    1. Level 2\n        1. Level 3",
-            &mut app,
-            true,
-        );
+        let editor =
+            model_from_markdown("1. Level 1\n    1. Level 2\n        1. Level 3", &mut app);
         editor.update(&mut app, |editor, ctx| {
             assert_eq!(
                 editor.debug_buffer(ctx),
@@ -954,7 +913,7 @@ fn test_conversion_preserves_indent_level() {
 fn test_task_list_toggling() {
     App::test((), |mut app| async move {
         initialize_deps(&mut app);
-        let editor = model_from_markdown("Some text \nMore", &mut app, true);
+        let editor = model_from_markdown("Some text \nMore", &mut app);
         layout_model(&mut app, &editor).await;
 
         editor.update(&mut app, |editor, ctx| {
@@ -985,7 +944,7 @@ fn test_ordered_list_shortcut_within_line() {
 
     App::test((), |mut app| async move {
         initialize_deps(&mut app);
-        let editor = model_from_markdown("Some text \nMore", &mut app, true);
+        let editor = model_from_markdown("Some text \nMore", &mut app);
 
         editor.update(&mut app, |editor, ctx| {
             assert_eq!(editor.debug_buffer(ctx), "<text>Some text \\nMore");
@@ -1018,7 +977,7 @@ fn test_ordered_list_shortcut_within_line() {
 fn test_ordered_list_shortcut_anchored() {
     App::test((), |mut app| async move {
         initialize_deps(&mut app);
-        let editor = model_from_markdown("2\\. Not a list", &mut app, true);
+        let editor = model_from_markdown("2\\. Not a list", &mut app);
 
         editor.update(&mut app, |editor, ctx| {
             // First, make sure the buffer has an untriggered potential shortcut. A more likely way
@@ -1043,7 +1002,7 @@ fn test_ordered_list_shortcut_anchored() {
 fn test_ordered_list_start_number() {
     App::test((), |mut app| async move {
         initialize_deps(&mut app);
-        let editor = model_from_markdown("", &mut app, true);
+        let editor = model_from_markdown("", &mut app);
         editor.update(&mut app, |editor, ctx| {
             editor.user_insert("3", ctx);
             assert_eq!(editor.debug_buffer(ctx), "<text>3");
@@ -1063,7 +1022,7 @@ fn test_ordered_list_renumbering() {
     // - If it would not, we don't apply the shortcut
     App::test((), |mut app| async move {
         initialize_deps(&mut app);
-        let editor = model_from_markdown("1. First\n    1. Nested\n2. Second", &mut app, true);
+        let editor = model_from_markdown("1. First\n    1. Nested\n2. Second", &mut app);
         editor.update(&mut app, |editor, ctx| {
             assert_eq!(
                 editor.debug_buffer(ctx),
@@ -1106,11 +1065,7 @@ fn test_ordered_list_renumbering() {
 fn test_select_paragraph() {
     App::test((), |mut app| async move {
         initialize_deps(&mut app);
-        let editor = model_from_markdown(
-            "First line\nSecond line\n```\nCode block\n```",
-            &mut app,
-            true,
-        );
+        let editor = model_from_markdown("First line\nSecond line\n```\nCode block\n```", &mut app);
 
         // Select the second line of text.
         editor.update(&mut app, |editor, ctx| {
@@ -1162,11 +1117,7 @@ fn test_select_paragraph() {
 fn test_select_line_out_of_bounds() {
     App::test((), |mut app| async move {
         initialize_deps(&mut app);
-        let editor = model_from_markdown(
-            "First line\nSecond line\n```\nCode block\n```",
-            &mut app,
-            true,
-        );
+        let editor = model_from_markdown("First line\nSecond line\n```\nCode block\n```", &mut app);
 
         // Ensure there's an initial selection.
         editor.update(&mut app, |editor, ctx| editor.cursor_at(4.into(), ctx));
@@ -1200,11 +1151,7 @@ fn test_select_line_out_of_bounds() {
 fn test_select_line_in_block() {
     App::test((), |mut app| async move {
         initialize_deps(&mut app);
-        let editor = model_from_markdown(
-            "```\nFirst line\nSecond line\nThird line\n```",
-            &mut app,
-            true,
-        );
+        let editor = model_from_markdown("```\nFirst line\nSecond line\nThird line\n```", &mut app);
 
         // Select one of the code block lines.
         editor.update(&mut app, |editor, ctx| {
@@ -1235,7 +1182,7 @@ fn test_select_line_in_block() {
 fn test_select_to_end_of_last_line() {
     App::test((), |mut app| async move {
         initialize_deps(&mut app);
-        let editor = model_from_markdown("First line\nLast line", &mut app, true);
+        let editor = model_from_markdown("First line\nLast line", &mut app);
         layout_model(&mut app, &editor).await;
         editor.update(&mut app, |editor, ctx| {
             // Position the cursor in the middle of the last line.
@@ -1265,7 +1212,7 @@ fn test_select_to_end_of_last_line() {
 fn test_move_within_line() {
     App::test((), |mut app| async move {
         initialize_deps(&mut app);
-        let editor = model_from_markdown("First line\nMiddle line\nLast line", &mut app, true);
+        let editor = model_from_markdown("First line\nMiddle line\nLast line", &mut app);
         layout_model(&mut app, &editor).await;
         editor.update(&mut app, |editor, ctx| {
             // Position the cursor in the middle of the middle line.
@@ -1298,7 +1245,7 @@ fn test_move_within_line() {
 fn test_move_to_start_of_first_line() {
     App::test((), |mut app| async move {
         initialize_deps(&mut app);
-        let editor = model_from_markdown("First line\nLast line", &mut app, true);
+        let editor = model_from_markdown("First line\nLast line", &mut app);
         layout_model(&mut app, &editor).await;
         editor.update(&mut app, |editor, ctx| {
             // Position the cursor in the middle of the first line.
@@ -1326,7 +1273,7 @@ fn test_move_to_start_of_first_line() {
 fn test_move_up_on_first_line() {
     App::test((), |mut app| async move {
         initialize_deps(&mut app);
-        let editor = model_from_markdown("First line\nLast line", &mut app, true);
+        let editor = model_from_markdown("First line\nLast line", &mut app);
         editor.update(&mut app, |editor, ctx| {
             // Position the cursor in the middle of the first line.
             editor.cursor_at(3.into(), ctx);
@@ -1353,7 +1300,7 @@ fn test_move_up_on_first_line() {
 fn test_move_down_on_last_line() {
     App::test((), |mut app| async move {
         initialize_deps(&mut app);
-        let editor = model_from_markdown("First line\nLast line", &mut app, true);
+        let editor = model_from_markdown("First line\nLast line", &mut app);
         layout_model(&mut app, &editor).await;
         editor.update(&mut app, |editor, ctx| {
             // Position the cursor in the middle of the last line.
@@ -1381,7 +1328,7 @@ fn test_move_down_on_last_line() {
 fn test_enter_on_first_code_block() {
     App::test((), |mut app| async move {
         initialize_deps(&mut app);
-        let editor = model_from_markdown("```\nFirst\n```", &mut app, true);
+        let editor = model_from_markdown("```\nFirst\n```", &mut app);
         let render_state = app.read(|ctx| editor.as_ref(ctx).render_state().clone());
         layout_model(&mut app, &editor).await;
 
@@ -1417,7 +1364,7 @@ fn test_enter_on_first_code_block() {
 fn test_enter_on_first_header() {
     App::test((), |mut app| async move {
         initialize_deps(&mut app);
-        let editor = model_from_markdown("# Hello", &mut app, true);
+        let editor = model_from_markdown("# Hello", &mut app);
         let render_state = app.read(|ctx| editor.as_ref(ctx).render_state().clone());
         layout_model(&mut app, &editor).await;
 
@@ -1461,7 +1408,7 @@ fn test_debounced_resizes() {
     App::test((), |mut app| async move {
         initialize_deps(&mut app);
 
-        let model_handle = model_from_markdown("This is resizable text", &mut app, true);
+        let model_handle = model_from_markdown("This is resizable text", &mut app);
 
         let (events_tx, events_rx) = async_channel::unbounded();
         let render_state = app.read(|ctx| model_handle.as_ref(ctx).render_state().clone());
@@ -1538,7 +1485,6 @@ A command
 
 Text"#,
             &mut app,
-            true,
         );
         layout_model(&mut app, &model_handle).await;
 
@@ -1572,7 +1518,6 @@ A command
 
 Text"#,
             &mut app,
-            true,
         );
         layout_model(&mut app, &model_handle).await;
 
@@ -1611,7 +1556,6 @@ More text
 cargo run
 ```"#,
             &mut app,
-            true,
         );
 
         finish_highlighting(&model_handle, 2, &mut seen_futures, &mut app).await;
@@ -1672,7 +1616,6 @@ a
 cargo run
 ```"#,
             &mut app,
-            true,
         );
 
         finish_highlighting(&model_handle, 2, &mut seen_futures, &mut app).await;
@@ -1712,7 +1655,6 @@ More text
 Second command
 ```"#,
             &mut app,
-            true,
         );
         layout_model(&mut app, &model_handle).await;
 
@@ -1776,7 +1718,6 @@ More text
 Second command
 ```"#,
             &mut app,
-            true,
         );
         layout_model(&mut app, &model_handle).await;
 
@@ -1815,7 +1756,6 @@ More text
 Second command
 ```"#,
             &mut app,
-            true,
         );
         layout_model(&mut app, &model_handle).await;
 
@@ -1844,144 +1784,11 @@ Second command
     });
 }
 
-// Mock out a server workflow with the given i64 ID.
-fn mock_server_workflow(id: i64, app: &mut App) {
-    let server_id: ServerId = id.into();
-    let workflow_id: WorkflowId = server_id.into();
-    let sync_id = SyncId::ServerId(workflow_id.into());
-    let ts = Utc::now();
-
-    let server_metadata = ServerMetadata {
-        uid: server_id,
-        revision: Revision::now(),
-        metadata_last_updated_ts: ts.into(),
-        trashed_ts: None,
-        folder_id: None,
-        is_welcome_object: false,
-        creator_uid: None,
-        last_editor_uid: None,
-        current_editor_uid: None,
-    };
-
-    let workflow = ServerWorkflow::new(
-        SyncId::ServerId(workflow_id.into()),
-        CloudWorkflowModel::new(Workflow::new(format!("w{id}"), format!("c{id}"))),
-        server_metadata,
-        ServerPermissions {
-            space: Owner::mock_current_user(),
-            guests: Vec::new(),
-            permissions_last_updated_ts: ts.into(),
-            anyone_link_sharing: None,
-        },
-    );
-
-    CloudModel::handle(app).update(app, |cloud_model, _| {
-        cloud_model.add_object(sync_id, CloudWorkflow::new_from_server(workflow));
-    });
-}
-
-#[test]
-fn test_interleaving_command_and_embedding() {
-    App::test((), |mut app| async move {
-        initialize_deps(&mut app);
-        app.add_singleton_model(CloudModel::mock);
-
-        // IDs are padded to be length 22.
-        mock_server_workflow(123, &mut app);
-        mock_server_workflow(245, &mut app);
-
-        let model_handle = model_from_markdown(
-            r#"Text
-```warp-embedded-object
-id: Workflow-test_uid00000000000123
-```
-More text
-```warp-embedded-object
-id: Workflow-test_uid00000000000245
-```
-```Python
-def
-```
-```
-First command
-```"#,
-            &mut app,
-            false,
-        );
-        layout_model(&mut app, &model_handle).await;
-
-        // From the first line of text, we can't select a command above, but we can select a command below.
-        model_handle.update(&mut app, |model, ctx| {
-            model.cursor_at(CharOffset::from(2), ctx);
-
-            model.select_command_up(ctx);
-            assert!(!model.has_command_selection(ctx));
-
-            // Embedded workflows should be selectable.
-            model.select_command_down(ctx);
-            assert_eq!(selected_commands(model, ctx), vec![CharOffset::from(5)]);
-
-            // Should jump to the next embedded workflow.
-            model.select_command_down(ctx);
-            assert_eq!(selected_commands(model, ctx), vec![CharOffset::from(16)]);
-
-            // Should do the python block next
-            model.select_command_down(ctx);
-            assert_eq!(selected_commands(model, ctx), vec![CharOffset::from(17)]);
-
-            // Now the last block
-            model.select_command_down(ctx);
-            assert_eq!(selected_commands(model, ctx), vec![CharOffset::from(21)]);
-        });
-
-        model_handle.update(&mut app, |model, ctx| {
-            model.clear_command_selections(ctx);
-            model.cursor_at(CharOffset::from(25), ctx);
-
-            model.select_command_up(ctx);
-            assert_eq!(selected_commands(model, ctx), vec![CharOffset::from(21)]);
-
-            model.select_command_up(ctx);
-            assert_eq!(selected_commands(model, ctx), vec![CharOffset::from(17)]);
-
-            model.select_command_up(ctx);
-            assert_eq!(selected_commands(model, ctx), vec![CharOffset::from(16)]);
-
-            model.select_command_up(ctx);
-            assert_eq!(selected_commands(model, ctx), vec![CharOffset::from(5)]);
-        });
-
-        // Test command selection behavior on edge of block offsets.
-        model_handle.update(&mut app, |model, ctx| {
-            model.clear_command_selections(ctx);
-            // Place the cursor right before an embedded block.
-            model.cursor_at(CharOffset::from(5), ctx);
-
-            // Visually the cursor position is before the embedded block, this operaton should be a no-op.
-            model.select_command_up(ctx);
-            assert!(!model.has_command_selection(ctx));
-
-            // Visually the cursor position is before the embedded block, this should select embedded block at offset.
-            model.select_command_down(ctx);
-            assert_eq!(selected_commands(model, ctx), vec![CharOffset::from(5)]);
-        });
-
-        model_handle.update(&mut app, |model, ctx| {
-            model.clear_command_selections(ctx);
-            model.cursor_at(CharOffset::from(6), ctx);
-
-            // Visually the cursor position is after the embedded block, this operaton should select the embedded block.
-            model.select_command_up(ctx);
-            assert_eq!(selected_commands(model, ctx), vec![CharOffset::from(5)]);
-        });
-    })
-}
-
 #[test]
 fn test_toggle_style_at_cursor() {
     App::test((), |mut app| async move {
         initialize_deps(&mut app);
-        let model_handle = model_from_markdown("Hello", &mut app, true);
+        let model_handle = model_from_markdown("Hello", &mut app);
 
         model_handle.update(&mut app, |model, ctx| {
             model.cursor_at(2.into(), ctx);
@@ -2015,7 +1822,7 @@ fn test_toggle_style_at_cursor() {
 fn test_moving_resets_cursor_styles() {
     App::test((), |mut app| async move {
         initialize_deps(&mut app);
-        let model_handle = model_from_markdown("Hello", &mut app, true);
+        let model_handle = model_from_markdown("Hello", &mut app);
 
         // First, make sure the active style at the cursor is italic.
         model_handle.update(&mut app, |model, ctx| {
@@ -2040,7 +1847,7 @@ fn test_movement_cut() {
     App::test((), |mut app| async move {
         initialize_deps(&mut app);
         let model_handle: ModelHandle<NotebooksEditorModel> =
-            model_from_markdown("**First** line\nSecond line\n", &mut app, true);
+            model_from_markdown("**First** line\nSecond line\n", &mut app);
         layout_model(&mut app, &model_handle).await;
 
         model_handle.update(&mut app, |model, ctx| {
@@ -2085,7 +1892,7 @@ fn test_paste_multiline_into_code_blocks() {
     App::test((), |mut app| async move {
         initialize_deps(&mut app);
         let model_handle: ModelHandle<NotebooksEditorModel> =
-            model_from_markdown("text\n```\ncode\n```\n", &mut app, true);
+            model_from_markdown("text\n```\ncode\n```\n", &mut app);
 
         model_handle.update(&mut app, |model, ctx| {
             // Position the cursor at the end of the code block.
@@ -2119,7 +1926,7 @@ fn test_delete_word_backwards() {
     App::test((), |mut app| async move {
         initialize_deps(&mut app);
         let model_handle: ModelHandle<NotebooksEditorModel> =
-            model_from_markdown("**First** line\nSecond line\n", &mut app, true);
+            model_from_markdown("**First** line\nSecond line\n", &mut app);
 
         model_handle.update(&mut app, |model, ctx| {
             model.cursor_at(15.into(), ctx);
@@ -2169,7 +1976,7 @@ fn test_delete_with_selection() {
     App::test((), |mut app| async move {
         initialize_deps(&mut app);
         let model_handle: ModelHandle<NotebooksEditorModel> =
-            model_from_markdown("**First** line\nSecond line\n", &mut app, true);
+            model_from_markdown("**First** line\nSecond line\n", &mut app);
 
         model_handle.update(&mut app, |model, ctx| {
             // Select `irs`.
@@ -2209,7 +2016,6 @@ command
 ```
 More text"#,
             &mut app,
-            true,
         );
         // Ensure the code block is highlighted to prevent flakiness.
         finish_highlighting(&model_handle, 1, &mut highlighting_futures, &mut app).await;
@@ -2260,7 +2066,6 @@ fn test_delete_with_mermaid_command_selection() {
         let model_handle = model_from_markdown(
             "Text\n```mermaid\ngraph TD\nA --> B\n```\nMore text",
             &mut app,
-            true,
         );
         layout_model(&mut app, &model_handle).await;
 
@@ -2296,7 +2101,7 @@ A --> B
 ```
 More text";
 
-        let model_handle = model_from_markdown(markdown, &mut app, true);
+        let model_handle = model_from_markdown(markdown, &mut app);
         model_handle.update(&mut app, |model, ctx| {
             model.set_interaction_state(InteractionState::Editable, ctx);
         });
@@ -2376,7 +2181,7 @@ A --> B
 ```
 More text";
 
-        let model_handle = model_from_markdown(markdown, &mut app, true);
+        let model_handle = model_from_markdown(markdown, &mut app);
         model_handle.update(&mut app, |model, ctx| {
             model.set_interaction_state(InteractionState::Editable, ctx);
         });
@@ -2426,7 +2231,7 @@ fn test_move_up_from_below_rendered_mermaid_block_lands_on_block_start() {
         let _editable_flag = FeatureFlag::EditableMarkdownMermaid.override_enabled(true);
         let markdown = "Before\n```mermaid\ngraph TD\nA --> B\n```\nAfter";
 
-        let model_handle = model_from_markdown(markdown, &mut app, true);
+        let model_handle = model_from_markdown(markdown, &mut app);
         model_handle.update(&mut app, |model, ctx| {
             model.set_interaction_state(InteractionState::Editable, ctx);
         });
@@ -2469,7 +2274,7 @@ fn test_shift_select_across_rendered_mermaid_block_is_reversible_from_below() {
         let _editable_flag = FeatureFlag::EditableMarkdownMermaid.override_enabled(true);
         let markdown = "Before\n```mermaid\ngraph TD\nA --> B\n```\nAfter";
 
-        let model_handle = model_from_markdown(markdown, &mut app, true);
+        let model_handle = model_from_markdown(markdown, &mut app);
         model_handle.update(&mut app, |model, ctx| {
             model.set_interaction_state(InteractionState::Editable, ctx);
         });
@@ -2525,7 +2330,7 @@ fn test_move_down_from_rendered_mermaid_block_start_returns_below_block() {
         let _editable_flag = FeatureFlag::EditableMarkdownMermaid.override_enabled(true);
         let markdown = "Before\n```mermaid\ngraph TD\nA --> B\n```\nAfter";
 
-        let model_handle = model_from_markdown(markdown, &mut app, true);
+        let model_handle = model_from_markdown(markdown, &mut app);
         model_handle.update(&mut app, |model, ctx| {
             model.set_interaction_state(InteractionState::Editable, ctx);
         });
@@ -2564,7 +2369,7 @@ fn test_move_down_from_rendered_mermaid_block_start_returns_below_block() {
 fn test_cut_text() {
     App::test((), |mut app| async move {
         initialize_deps(&mut app);
-        let model_handle = model_from_markdown("* First\n* Second **line**\n", &mut app, true);
+        let model_handle = model_from_markdown("* First\n* Second **line**\n", &mut app);
         layout_model(&mut app, &model_handle).await;
 
         // Cutting with no selection is a no-op.
@@ -2601,7 +2406,7 @@ fn test_cut_text() {
 fn test_cut_code_block() {
     App::test((), |mut app| async move {
         initialize_deps(&mut app);
-        let model_handle = model_from_markdown("Text\n```\ncommand\n```\n* List", &mut app, true);
+        let model_handle = model_from_markdown("Text\n```\ncommand\n```\n* List", &mut app);
         layout_model(&mut app, &model_handle).await;
 
         model_handle.update(&mut app, |model, ctx| {
@@ -2628,11 +2433,8 @@ fn test_cut_mermaid_code_block_uses_fenced_markdown_plain_text() {
         initialize_deps(&mut app);
         let _flag = FeatureFlag::MarkdownMermaid.override_enabled(true);
         let _editable_flag = FeatureFlag::EditableMarkdownMermaid.override_enabled(true);
-        let model_handle = model_from_markdown(
-            "Text\n```mermaid\ngraph TD\nA --> B\n```\n* List",
-            &mut app,
-            true,
-        );
+        let model_handle =
+            model_from_markdown("Text\n```mermaid\ngraph TD\nA --> B\n```\n* List", &mut app);
         layout_model(&mut app, &model_handle).await;
 
         model_handle.update(&mut app, |model, ctx| {
@@ -2667,11 +2469,8 @@ fn test_copy_mermaid_code_block_adds_html_without_image_clipboard_data() {
         initialize_deps(&mut app);
         let _flag = FeatureFlag::MarkdownMermaid.override_enabled(true);
         let _editable_flag = FeatureFlag::EditableMarkdownMermaid.override_enabled(true);
-        let model_handle = model_from_markdown(
-            "Text\n```mermaid\ngraph TD\nA --> B\n```\n* List",
-            &mut app,
-            true,
-        );
+        let model_handle =
+            model_from_markdown("Text\n```mermaid\ngraph TD\nA --> B\n```\n* List", &mut app);
         layout_model(&mut app, &model_handle).await;
 
         model_handle.update(&mut app, |model, ctx| {
@@ -2704,8 +2503,7 @@ fn test_copy_selection_with_markdown_image_omits_image_clipboard_data() {
     App::test((), |mut app| async move {
         initialize_deps(&mut app);
 
-        let model_handle =
-            model_from_markdown("Before\n![Alt text](diagram.png)\nAfter", &mut app, true);
+        let model_handle = model_from_markdown("Before\n![Alt text](diagram.png)\nAfter", &mut app);
         layout_model(&mut app, &model_handle).await;
 
         model_handle.update(&mut app, |model, ctx| {
@@ -2742,7 +2540,7 @@ fn test_mermaid_feature_flag_disables_rendering_and_toggle() {
         let markdown = "```mermaid\ngraph TD\nA --> B\n```";
 
         let _disabled = FeatureFlag::MarkdownMermaid.override_enabled(false);
-        let model_handle = model_from_markdown(markdown, &mut app, true);
+        let model_handle = model_from_markdown(markdown, &mut app);
         model_handle.update(&mut app, |model, ctx| {
             model.set_interaction_state(InteractionState::Selectable, ctx);
         });
@@ -2793,7 +2591,7 @@ fn test_default_mermaid_display_mode_renders_initial_mermaid_blocks() {
         let _enabled = FeatureFlag::MarkdownMermaid.override_enabled(true);
         let markdown = "```mermaid\ngraph TD\nA --> B\n```";
 
-        let model_handle = model_from_markdown(markdown, &mut app, true);
+        let model_handle = model_from_markdown(markdown, &mut app);
         model_handle.update(&mut app, |model, ctx| {
             model.set_default_mermaid_display_mode(MarkdownDisplayMode::Rendered, ctx);
             model.set_interaction_state(InteractionState::Selectable, ctx);
@@ -2831,7 +2629,7 @@ fn test_rendered_mermaid_offsets_ignore_shell_commands() {
         let _enabled = FeatureFlag::MarkdownMermaid.override_enabled(true);
         let markdown = "```\necho two\n```\n\n```mermaid\ngraph TD\n  C-->D\n```";
 
-        let model_handle = model_from_markdown(markdown, &mut app, true);
+        let model_handle = model_from_markdown(markdown, &mut app);
         model_handle.update(&mut app, |model, ctx| {
             model.set_default_mermaid_display_mode(MarkdownDisplayMode::Rendered, ctx);
         });
@@ -2856,7 +2654,7 @@ fn test_dont_invalidate_command_selection() {
     App::test((), |mut app| async move {
         initialize_deps(&mut app);
 
-        let model_handle = model_from_markdown("Hello\n```\necho test\n```\nworld", &mut app, true);
+        let model_handle = model_from_markdown("Hello\n```\necho test\n```\nworld", &mut app);
         layout_model(&mut app, &model_handle).await;
         let command_model = command_models(&model_handle, &mut app)
             .into_iter()
@@ -2894,7 +2692,7 @@ fn test_insert_block_after_single_cursor() {
     App::test((), |mut app| async move {
         initialize_deps(&mut app);
 
-        let model_handle = model_from_markdown("Hello\n```\necho test\n```\nworld", &mut app, true);
+        let model_handle = model_from_markdown("Hello\n```\necho test\n```\nworld", &mut app);
 
         assert_eq!(
             model_handle.read(&app, |model, ctx| model.content().as_ref(ctx).debug()),
@@ -2944,11 +2742,8 @@ fn test_insert_block_after_single_cursor() {
 fn test_multiselect_markdown_block_conversion() {
     App::test((), |mut app| async move {
         initialize_deps(&mut app);
-        let editor = model_from_markdown(
-            "This is a list:\n1. First\n2. Second\n3. Third",
-            &mut app,
-            true,
-        );
+        let editor =
+            model_from_markdown("This is a list:\n1. First\n2. Second\n3. Third", &mut app);
 
         editor.update(&mut app, |editor, ctx| {
             assert_eq!(
@@ -2980,11 +2775,8 @@ fn test_multiselect_markdown_block_conversion() {
 fn test_multiselect_inline_markdown() {
     App::test((), |mut app| async move {
         initialize_deps(&mut app);
-        let editor = model_from_markdown(
-            "This is a list:\n1. First\n2. Second\n3. Third",
-            &mut app,
-            true,
-        );
+        let editor =
+            model_from_markdown("This is a list:\n1. First\n2. Second\n3. Third", &mut app);
 
         editor.update(&mut app, |editor, ctx| {
             assert_eq!(
@@ -3019,7 +2811,6 @@ fn test_multiselect_pasting() {
         let editor = model_from_markdown(
             "First text\nSecond line\nThird line\n```\ncode\n```",
             &mut app,
-            true,
         );
         finish_highlighting(&editor, 1, &mut HashSet::new(), &mut app).await;
 
@@ -3092,7 +2883,7 @@ fn test_multiselect_pasting() {
 fn test_multiselect_delete() {
     App::test((), |mut app| async move {
         initialize_deps(&mut app);
-        let editor = model_from_markdown("First text\nSecond line\nThird line", &mut app, true);
+        let editor = model_from_markdown("First text\nSecond line\nThird line", &mut app);
         layout_model(&mut app, &editor).await;
 
         // Deleting selections should delete the selected text.

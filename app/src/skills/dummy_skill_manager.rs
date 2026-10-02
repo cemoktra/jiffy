@@ -1,0 +1,43 @@
+use agent_context::skills::SkillProvider;
+use warp_util::local_or_remote_path::LocalOrRemotePath;
+use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
+
+use super::{SkillDescriptor, SkillManagerEvent};
+
+pub struct SkillManager {}
+
+impl SkillManager {
+    pub fn new(_ctx: &mut ModelContext<Self>) -> Self {
+        Self {}
+    }
+
+    pub fn get_skills_for_working_directory(
+        &self,
+        _working_directory: Option<&LocalOrRemotePath>,
+        _ctx: &AppContext,
+    ) -> Vec<SkillDescriptor> {
+        vec![]
+    }
+
+    pub fn skill_exists_for_any_provider(
+        &self,
+        _skill: &SkillDescriptor,
+        _providers: &[SkillProvider],
+    ) -> bool {
+        false
+    }
+
+    pub fn best_supported_provider(
+        &self,
+        skill: &SkillDescriptor,
+        _supported_providers: &[SkillProvider],
+    ) -> SkillProvider {
+        skill.provider
+    }
+}
+
+impl Entity for SkillManager {
+    type Event = SkillManagerEvent;
+}
+
+impl SingletonEntity for SkillManager {}

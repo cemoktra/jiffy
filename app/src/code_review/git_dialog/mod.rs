@@ -10,8 +10,6 @@
 //! outcome variant, and wire up dispatch.
 
 use pathfinder_geometry::vector::vec2f;
-use warp_core::features::FeatureFlag;
-use warp_core::send_telemetry_from_ctx;
 use warp_core::ui::appearance::Appearance;
 use warpui::elements::{
     Align, Border, ChildAnchor, ChildView, ClippedScrollStateHandle, ClippedScrollable,
@@ -29,20 +27,13 @@ use warpui::{
 
 use crate::code::buffer_location::LocalOrRemotePath;
 use crate::code::editor::{add_color, remove_color};
-use crate::code_review::diff_state::{
-    CommitChainMode, DiffStateModel, DiffStateModelEvent, GitOpResult,
-};
-use crate::code_review::telemetry_event::{
-    CodeReviewTelemetryEvent, GitDialogStatus, GitOperationKind,
-};
-use crate::settings::AISettings;
+use crate::code_review::diff_state::{DiffStateModel, DiffStateModelEvent, GitOpResult};
 use crate::ui_components::dialog::{Dialog, dialog_styles};
 use crate::ui_components::icons::Icon;
 use crate::util::git::{Commit, FileChangeEntry};
 use crate::view_components::DismissibleToast;
 use crate::view_components::action_button::{ActionButton, ButtonSize, NakedTheme, SecondaryTheme};
 use crate::workspace::ToastStack;
-use crate::workspaces::user_workspaces::UserWorkspaces;
 
 pub(crate) mod commit;
 pub(crate) mod pr;
@@ -105,21 +96,6 @@ fn show_toast(msg: impl Into<String>, ctx: &mut ViewContext<GitDialog>) {
         let toast = DismissibleToast::default(msg);
         toast_stack.add_ephemeral_toast(toast, window_id, ctx);
     });
-}
-
-/// Whether the git-operations AI autogen flow should send an AI request.
-///
-/// Folds the parent feature flag, the user's dedicated per-feature AI toggle
-/// (which itself requires active AI / auth / remote-session org policy to
-/// allow AI), and the current team's Git Operations AI tier policy.
-///
-/// When this returns `false`, call sites skip AI entirely: commit.rs opens
-/// with the manual-type placeholder and pr.rs goes straight to
-/// `gh pr create --fill`.
-fn should_send_git_ops_ai_request(app: &AppContext) -> bool {
-    FeatureFlag::GitOperationsInCodeReview.is_enabled()
-        && AISettings::as_ref(app).is_git_operations_autogen_enabled(app)
-        && UserWorkspaces::as_ref(app).is_git_operations_ai_enabled()
 }
 
 /// Maps a raw git error string to a user-friendly toast message. Known
@@ -508,10 +484,6 @@ impl GitDialog {
             cancel_button,
             close_button,
         };
-        // Open-time AI commit-message autogen runs for both backends; the model
-        // generates it (local in-process, remote on the daemon) and the result
-        // returns via the diff-state subscription wired up just above.
-        commit::maybe_start_commit_message_autogen(&this, ctx);
         // Remote repos source the Changes box from synced metadata (the local
         // path loads it from the working tree in `commit::new_state`).
         commit::refresh_remote_file_changes(&mut this, ctx);
@@ -534,7 +506,7 @@ impl GitDialog {
         );
         ctx.subscribe_to_model(&diff_state_model, Self::handle_diff_state_event);
         let state = push::new_state(publish, commits);
-        Self {
+        let this = Self {
             repo_location,
             diff_state_model,
             branch_name,
@@ -543,7 +515,10 @@ impl GitDialog {
             confirm_button,
             cancel_button,
             close_button,
-        }
+        };
+        #[cfg(feature = "local_fs")]
+        push::maybe_request_bookmark_name(&this, ctx);
+        this
     }
 
     pub fn new_for_pr(
@@ -625,13 +600,6 @@ impl GitDialog {
         event: &DiffStateModelEvent,
         ctx: &mut ViewContext<Self>,
     ) {
-        // Commit-message autogen arrives at dialog open (before any op is
-        // initiated), so it's handled outside the `loading` gate the
-        // op-completion events use below.
-        if let DiffStateModelEvent::CommitMessageGenerated(result) = event {
-            commit::apply_generated_commit_message(self, result.clone(), ctx);
-            return;
-        }
         // Commit mode (remote) sources its Changes box from synced metadata, so
         // refresh it whenever metadata lands. Arrives independently of any
         // in-flight op, so it's handled outside the `loading` gate below.
@@ -659,25 +627,19 @@ impl GitDialog {
                     GitDialogMode::Commit(state) => state.intent,
                     _ => return,
                 };
-                // Unified completion path (toast + telemetry + close) for both
-                // backends; the model already applied the delta / PR info to
-                // metadata before emitting this event.
-                commit::finish_commit_chain(self, intent, result.clone(), ctx);
+                // Unified completion path (toast + close) for both backends; the model already
+                // applied the delta / PR info to metadata before emitting this event.
+                commit::finish_commit_chain(intent, result.clone(), ctx);
             }
             GitOpResult::PushCompleted(result) => {
                 let publish = match &self.mode {
                     GitDialogMode::Push(state) => state.publish,
                     _ => return,
                 };
-                push::finish_push(
-                    self,
-                    publish,
-                    result.clone().map_err(|e| anyhow::anyhow!(e)),
-                    ctx,
-                );
+                push::finish_push(publish, result.clone().map_err(|e| anyhow::anyhow!(e)), ctx);
             }
             GitOpResult::PrCreated(result) => {
-                pr::finish_create_pr(self, result.clone().map_err(|e| anyhow::anyhow!(e)), ctx);
+                pr::finish_create_pr(result.clone().map_err(|e| anyhow::anyhow!(e)), ctx);
             }
         }
     }
@@ -727,7 +689,7 @@ impl GitDialog {
                 !commit::is_ready_to_confirm(state, ctx),
                 commit::confirm_tooltip(state, ctx),
             ),
-            GitDialogMode::Push(_) => (false, None),
+            GitDialogMode::Push(state) => (!push::is_ready_to_confirm(state, ctx), None),
             GitDialogMode::CreatePr(state) => (!pr::is_ready_to_confirm(state), None),
         };
         self.confirm_button.update(ctx, |b, ctx| {
@@ -881,36 +843,6 @@ impl TypedActionView for GitDialog {
         match action {
             GitDialogAction::Cancel => {
                 if !self.loading {
-                    let operation = match &self.mode {
-                        GitDialogMode::Commit(state) => match state.intent {
-                            CommitChainMode::CommitOnly => GitOperationKind::CommitOnly,
-                            CommitChainMode::CommitAndPush => GitOperationKind::CommitAndPush,
-                            CommitChainMode::CommitAndCreatePr => {
-                                GitOperationKind::CommitAndCreatePr
-                            }
-                        },
-                        GitDialogMode::Push(state) => {
-                            if state.publish {
-                                GitOperationKind::Publish
-                            } else {
-                                GitOperationKind::Push
-                            }
-                        }
-                        GitDialogMode::CreatePr(_) => GitOperationKind::CreatePr,
-                    };
-                    // Derive the real local/remote value rather than hardcoding
-                    // it, so cancel telemetry matches the repo the dialog acts
-                    // on (the completion paths report the same value).
-                    let is_local = !self.repo_location.is_remote();
-                    send_telemetry_from_ctx!(
-                        CodeReviewTelemetryEvent::GitDialogCompleted {
-                            is_local: Some(is_local),
-                            operation,
-                            status: GitDialogStatus::Cancelled,
-                            error: None,
-                        },
-                        ctx
-                    );
                     ctx.emit(GitDialogEvent::Cancelled);
                 }
             }

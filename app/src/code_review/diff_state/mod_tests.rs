@@ -1,16 +1,6 @@
 use super::{DiffMode, DiffState, DiffStateModel};
 
 #[test]
-fn new_for_test_creates_local_variant() {
-    warpui::App::test((), |mut app| async move {
-        let handle = app.add_model(DiffStateModel::new_for_test);
-        handle.read(&app, |model, _ctx| {
-            assert!(matches!(model, DiffStateModel::Local(_)));
-        });
-    });
-}
-
-#[test]
 fn get_returns_not_in_repository_for_test_model() {
     warpui::App::test((), |mut app| async move {
         let handle = app.add_model(DiffStateModel::new_for_test);

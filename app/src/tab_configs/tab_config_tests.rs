@@ -903,3 +903,42 @@ directory = "~/a"
         panic!("Expected fallback PaneTemplate");
     }
 }
+
+#[test]
+fn test_build_worktree_toml_creates_jj_workspace_in_jj_repo() {
+    let _jj_guard = crate::features::FeatureFlag::JjSupport.override_enabled(true);
+    let repo = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(repo.path().join(".jj").join("repo")).unwrap();
+    let repo_path = repo.path().to_str().unwrap();
+
+    let toml_str = build_worktree_config_toml("Worktree: jj", repo_path, "main", None);
+    let config: TabConfig = toml::from_str(&toml_str).expect("Generated TOML should parse");
+    assert!(config.is_worktree());
+    assert_eq!(
+        config.jj_workspace_repo_dirs().collect::<Vec<_>>(),
+        [repo_path]
+    );
+
+    let (_, template) = render_tab_config(&config, &HashMap::new(), Some("obsidian-hawk"));
+    let PaneTemplateType::PaneTemplate { commands, .. } = template else {
+        panic!("Expected PaneTemplate");
+    };
+    let workspace_path = generated_worktree_path_string(repo_path, "obsidian-hawk");
+    assert_eq!(
+        commands[0].exec,
+        format!("jj workspace add \"{workspace_path}\" --name obsidian-hawk -r main")
+    );
+    assert_eq!(commands[1].exec, format!("cd \"{workspace_path}\""));
+}
+
+#[test]
+fn test_worktree_add_command_omits_empty_jj_base() {
+    assert_eq!(
+        worktree_add_command(true, "ws", "/data/ws", ""),
+        "jj workspace add \"/data/ws\" --name ws"
+    );
+    assert_eq!(
+        worktree_add_command(false, "ws", "/data/ws", "main"),
+        "git worktree add -b ws \"/data/ws\" main"
+    );
+}

@@ -8,33 +8,16 @@
 //! The [`PaneContent`] interface requires implementers to maintain a [`PaneId`] for their pane.
 //! The [`PaneId`] must be created via a [`PaneView<BackingView>`]. The [`PaneId`] is consequently
 //! used to render a [`PaneView`] which internally renders the pane, including the [`BackingView`].
-pub(super) mod ai_document_pane;
-pub(super) mod ai_fact_pane;
-pub(super) mod code_diff_pane;
-pub(super) mod code_diff_pane_model;
 pub(super) mod code_pane;
-pub(super) mod custom_router_editor_pane;
-pub(super) mod env_var_collection_pane;
-pub(crate) mod environment_management_pane;
-pub(super) mod execution_profile_editor_pane;
 pub(super) mod file_pane;
-pub(super) mod get_started_pane;
-pub(super) mod get_started_view;
-#[cfg(not(target_family = "wasm"))]
-pub(super) mod local_harness_launch;
-pub(super) mod network_log_pane;
-pub(super) mod notebook_pane;
 pub(super) mod settings_pane;
 pub(super) mod terminal_pane;
 pub mod view;
-pub mod workflow_pane;
 
 use std::any::Any;
 use std::fmt::Display;
 
 use serde::{Deserialize, Serialize};
-use url::Url;
-use warp_util::remote_path::RemotePath;
 use warpui::elements::{DispatchEventResult, EventHandler, MouseInBehavior};
 use warpui::presenter::ChildView;
 use warpui::{
@@ -44,34 +27,17 @@ use warpui::{
 
 pub use self::view::{PaneHeaderAction, PaneHeaderCustomAction, PaneView, PaneViewEvent};
 use super::{ActivationReason, LeafContents, PaneGroup, PaneGroupAction};
-use crate::ai::ai_document_view::AIDocumentView;
-use crate::ai::blocklist::inline_action::code_diff_view::CodeDiffView;
-use crate::ai::execution_profiles::editor::ExecutionProfileEditorView;
-use crate::ai::facts::AIFactView;
 #[cfg(feature = "local_fs")]
 use crate::code::buffer_location::LocalOrRemotePath;
 use crate::code::view::CodeView;
-use crate::drive::sharing::ShareableObject;
-use crate::env_vars::view::env_var_collection::EnvVarCollectionView;
 use crate::menu::MenuItem;
 use crate::notebooks::file::FileNotebookView;
-use crate::notebooks::notebook::NotebookView;
 use crate::pane_group::focus_state::PaneFocusHandle;
-use crate::pane_group::pane::get_started_view::GetStartedView;
-use crate::server::network_log_view::NetworkLogView;
-use crate::server::telemetry::SharingDialogSource;
 use crate::settings::PaneSettings;
 use crate::settings_view::SettingsView;
-use crate::settings_view::environments_page::EnvironmentsPageView;
 use crate::terminal::TerminalView;
 use crate::terminal::available_shells::AvailableShell;
 use crate::view_components::action_button::ActionButton;
-use crate::workflows::workflow_view::WorkflowView;
-
-pub(super) fn init(app: &mut AppContext) {
-    self::view::init(app);
-    get_started_view::init(app);
-}
 
 /// The opaque identifier for an arbitrary pane. Consumers
 /// should not be concerned with the internal IDs that are used;
@@ -132,20 +98,9 @@ impl Display for IPaneId {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub(crate) enum IPaneType {
     Terminal,
-    Notebook,
     File,
     Code,
-    CodeDiff,
-    EnvVarCollection,
-    EnvironmentManagement,
-    Workflow,
     Settings,
-    AIFact,
-    AIDocument,
-    CustomRouterEditor,
-    ExecutionProfileEditor,
-    GetStarted,
-    NetworkLog,
     DeferredPlaceholder,
     /// A pane type only for tests.
     #[cfg(test)]
@@ -156,20 +111,9 @@ impl Display for IPaneType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             IPaneType::Terminal => write!(f, "Terminal"),
-            IPaneType::Notebook => write!(f, "Notebook"),
             IPaneType::File => write!(f, "File"),
             IPaneType::Code => write!(f, "Code"),
-            IPaneType::CodeDiff => write!(f, "Code Diff"),
-            IPaneType::EnvVarCollection => write!(f, "Environment Variable Collection"),
-            IPaneType::EnvironmentManagement => write!(f, "Environment Management"),
-            IPaneType::Workflow => write!(f, "Workflow"),
             IPaneType::Settings => write!(f, "Settings"),
-            IPaneType::AIFact => write!(f, "AI Fact"),
-            IPaneType::AIDocument => write!(f, "AI Document"),
-            IPaneType::CustomRouterEditor => write!(f, "Custom Router Editor"),
-            IPaneType::ExecutionProfileEditor => write!(f, "Execution Profile Editor"),
-            IPaneType::GetStarted => write!(f, "GetStarted"),
-            IPaneType::NetworkLog => write!(f, "Network Log"),
             IPaneType::DeferredPlaceholder => write!(f, "Placeholder"),
             #[cfg(test)]
             IPaneType::Dummy => write!(f, "Dummy"),
@@ -202,38 +146,9 @@ impl PaneId {
         Self::new_from_ctx(IPaneType::File, ctx)
     }
 
-    /// Creates a [`PaneId`] from a [`ViewContext<PaneView<NotebookView>>`]
-    pub fn from_notebook_pane_ctx(ctx: &ViewContext<PaneView<NotebookView>>) -> Self {
-        Self::new_from_ctx(IPaneType::Notebook, ctx)
-    }
-
-    /// Creates a [`PaneId`] from a [`ViewContext<PaneView<EnvVarCollectionView>>`]
-    pub fn from_env_var_collection_pane_ctx(
-        ctx: &ViewContext<PaneView<EnvVarCollectionView>>,
-    ) -> Self {
-        Self::new_from_ctx(IPaneType::EnvVarCollection, ctx)
-    }
-
-    /// Creates a [`PaneId`] from a [`ViewContext<PaneView<EnvironmentsPageView>>`]
-    pub fn from_environment_management_pane_ctx(
-        ctx: &ViewContext<PaneView<EnvironmentsPageView>>,
-    ) -> Self {
-        Self::new_from_ctx(IPaneType::EnvironmentManagement, ctx)
-    }
-
-    /// Creates a [`PaneId`] from a [`ViewContext<PaneView<WorkflowView>>`]
-    pub fn from_workflow_pane_ctx(ctx: &ViewContext<PaneView<WorkflowView>>) -> Self {
-        Self::new_from_ctx(IPaneType::Workflow, ctx)
-    }
-
     /// Creates a [`PaneId`] from a [`ViewContext<PaneView<TextView>>`]
     pub fn from_code_pane_ctx(ctx: &ViewContext<PaneView<CodeView>>) -> Self {
         Self::new_from_ctx(IPaneType::Code, ctx)
-    }
-
-    /// Creates a [`PaneId`] from a [`ViewContext<PaneView<CodeDiffView>>`]
-    pub fn from_code_diff_pane_ctx(ctx: &ViewContext<PaneView<CodeDiffView>>) -> Self {
-        Self::new_from_ctx(IPaneType::CodeDiff, ctx)
     }
 
     /// Creates a [`PaneId`] from a [`ViewContext<PaneView<SettingsView>>`]
@@ -241,51 +156,11 @@ impl PaneId {
         Self::new_from_ctx(IPaneType::Settings, ctx)
     }
 
-    /// Creates a [`PaneId`] from a [`ViewContext<PaneView<AIFactView>>`]
-    pub fn from_ai_fact_pane_ctx(ctx: &ViewContext<PaneView<AIFactView>>) -> Self {
-        Self::new_from_ctx(IPaneType::AIFact, ctx)
-    }
-
-    /// Creates a [`PaneId`] from a [`ViewContext<PaneView<AIDocumentView>>`]
-    pub fn from_ai_document_pane_ctx(ctx: &ViewContext<PaneView<AIDocumentView>>) -> Self {
-        Self::new_from_ctx(IPaneType::AIDocument, ctx)
-    }
-
-    /// Creates a [`PaneId`] from a [`ViewContext<PaneView<CustomRouterEditorView>>`]
-    pub fn from_custom_router_editor_pane_ctx(
-        ctx: &ViewContext<PaneView<crate::ai::custom_model_router_editor::CustomRouterEditorView>>,
-    ) -> Self {
-        Self::new_from_ctx(IPaneType::CustomRouterEditor, ctx)
-    }
-
-    /// Creates a [`PaneId`] from a [`ViewContext<PaneView<ExecutionProfileEditorView>>`]
-    pub fn from_execution_profile_editor_pane_ctx(
-        ctx: &ViewContext<PaneView<ExecutionProfileEditorView>>,
-    ) -> Self {
-        Self::new_from_ctx(IPaneType::ExecutionProfileEditor, ctx)
-    }
-
-    pub fn from_get_started_pane_ctx(ctx: &ViewContext<PaneView<GetStartedView>>) -> Self {
-        Self::new_from_ctx(IPaneType::GetStarted, ctx)
-    }
-
-    /// Creates a [`PaneId`] from a [`ViewContext<PaneView<NetworkLogView>>`].
-    pub fn from_network_log_pane_ctx(ctx: &ViewContext<PaneView<NetworkLogView>>) -> Self {
-        Self::new_from_ctx(IPaneType::NetworkLog, ctx)
-    }
-
     /// Creates a [`PaneId`] from a [`PaneView<TerminalView>`] entity ID.
     pub fn from_terminal_pane_view(
         terminal_pane_view: &ViewHandle<terminal_pane::TerminalPaneView>,
     ) -> Self {
         Self::new(IPaneType::Terminal, terminal_pane_view)
-    }
-
-    /// Creates a [`PaneId`] from a [`PaneView<NotebookView>`] entity ID.
-    pub fn from_notebook_pane_view(
-        notebook_pane_view: &ViewHandle<PaneView<NotebookView>>,
-    ) -> Self {
-        Self::new(IPaneType::Notebook, notebook_pane_view)
     }
 
     /// Creates a [`PaneId`] from a [`PaneView<FileNotebookView>`] entity ID.
@@ -298,92 +173,11 @@ impl PaneId {
         Self::new(IPaneType::Code, code_pane_view)
     }
 
-    /// Creates a [`PaneId`] from a [`PaneView<CodeDiffView>`] entity ID.
-    pub fn from_code_diff_pane_view(
-        code_diff_pane_view: &ViewHandle<PaneView<CodeDiffView>>,
-    ) -> Self {
-        Self::new(IPaneType::CodeDiff, code_diff_pane_view)
-    }
-
-    /// Creates a [`PaneId`] from a [`PaneView<EnvVarCollection>`] entity ID.
-    pub fn from_env_var_collection_view(
-        env_var_collection_view: &ViewHandle<PaneView<EnvVarCollectionView>>,
-    ) -> Self {
-        Self::new(IPaneType::EnvVarCollection, env_var_collection_view)
-    }
-
-    /// Creates a [`PaneId`] from a [`PaneView<EnvironmentsPageView>`] entity ID.
-    pub fn from_environment_management_pane_view(
-        environment_management_pane_view: &ViewHandle<PaneView<EnvironmentsPageView>>,
-    ) -> Self {
-        Self::new(
-            IPaneType::EnvironmentManagement,
-            environment_management_pane_view,
-        )
-    }
-
-    /// Creates a [`PaneId`] from a [`PaneView<WorkflowView>`] entity ID.
-    pub fn from_workflow_pane_view(
-        workflow_pane_view: &ViewHandle<PaneView<WorkflowView>>,
-    ) -> Self {
-        Self::new(IPaneType::Workflow, workflow_pane_view)
-    }
-
     /// Creates a [`PaneId`] from a [`PaneView<SettingsView>`] entity ID.
     pub fn from_settings_pane_view(
         settings_pane_view: &ViewHandle<PaneView<SettingsView>>,
     ) -> Self {
         Self::new(IPaneType::Settings, settings_pane_view)
-    }
-
-    /// Creates a [`PaneId`] from a [`PaneView<AIFactView>`] entity ID.
-    pub fn from_ai_fact_pane_view(ai_fact_pane_view: &ViewHandle<PaneView<AIFactView>>) -> Self {
-        Self::new(IPaneType::AIFact, ai_fact_pane_view)
-    }
-
-    /// Creates a [`PaneId`] from a [`PaneView<AIDocumentView>`] entity ID.
-    pub fn from_ai_document_pane_view(
-        ai_document_pane_view: &ViewHandle<PaneView<AIDocumentView>>,
-    ) -> Self {
-        Self::new(IPaneType::AIDocument, ai_document_pane_view)
-    }
-
-    /// Creates a [`PaneId`] from a [`PaneView<CustomRouterEditorView>`] entity ID.
-    pub fn from_custom_router_editor_pane_view(
-        view: &ViewHandle<PaneView<crate::ai::custom_model_router_editor::CustomRouterEditorView>>,
-    ) -> Self {
-        Self::new(IPaneType::CustomRouterEditor, view)
-    }
-
-    /// Creates a [`PaneId`] from a [`PaneView<ExecutionProfileEditorView>`] entity ID.
-    pub fn from_execution_profile_editor_pane_view(
-        execution_profile_editor_pane_view: &ViewHandle<PaneView<ExecutionProfileEditorView>>,
-    ) -> Self {
-        Self::new(
-            IPaneType::ExecutionProfileEditor,
-            execution_profile_editor_pane_view,
-        )
-    }
-
-    pub fn from_get_started_pane_view(
-        get_started_pane_view: &ViewHandle<PaneView<GetStartedView>>,
-    ) -> Self {
-        Self::new(IPaneType::GetStarted, get_started_pane_view)
-    }
-
-    /// Creates a [`PaneId`] from a [`PaneView<NetworkLogView>`] entity ID.
-    pub fn from_network_log_pane_view(
-        network_log_pane_view: &ViewHandle<PaneView<NetworkLogView>>,
-    ) -> Self {
-        Self::new(IPaneType::NetworkLog, network_log_pane_view)
-    }
-
-    #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
-    pub(super) fn deferred_placeholder_pane_id() -> Self {
-        Self(IPaneId {
-            pane_type: IPaneType::DeferredPlaceholder,
-            pane_view_id: warpui::EntityId::new(),
-        })
     }
 
     /// Creates a [`PaneId`] for a dummy pane.
@@ -416,10 +210,6 @@ impl PaneId {
         matches!(self.0.pane_type, IPaneType::Terminal)
     }
 
-    pub fn is_notebook_pane(&self) -> bool {
-        matches!(self.0.pane_type, IPaneType::Notebook)
-    }
-
     pub fn is_code_pane(&self) -> bool {
         matches!(self.0.pane_type, IPaneType::Code)
     }
@@ -428,33 +218,11 @@ impl PaneId {
         matches!(self.0.pane_type, IPaneType::File)
     }
 
-    pub fn is_code_diff_pane(&self) -> bool {
-        matches!(self.0.pane_type, IPaneType::CodeDiff)
-    }
-
-    pub fn is_environment_management_pane(&self) -> bool {
-        matches!(self.0.pane_type, IPaneType::EnvironmentManagement)
-    }
-
-    /// Returns true if this pane contains a Warp Drive object (notebook, workflow, etc.).
-    pub fn is_warp_drive_object_pane(&self) -> bool {
-        matches!(
-            self.0.pane_type,
-            IPaneType::Notebook
-                | IPaneType::Workflow
-                | IPaneType::EnvVarCollection
-                | IPaneType::AIFact
-        )
-    }
-
     /// Renders the child view backing this pane.
     pub fn render(self, app: &AppContext) -> Box<dyn Element> {
         let mut element = match self.0.pane_type {
             IPaneType::Terminal => {
                 ChildView::<PaneView<TerminalView>>::with_id(self.0.pane_view_id).finish()
-            }
-            IPaneType::Notebook => {
-                ChildView::<PaneView<NotebookView>>::with_id(self.0.pane_view_id).finish()
             }
             IPaneType::File => {
                 ChildView::<PaneView<FileNotebookView>>::with_id(self.0.pane_view_id).finish()
@@ -462,40 +230,8 @@ impl PaneId {
             IPaneType::Code => {
                 ChildView::<PaneView<CodeView>>::with_id(self.0.pane_view_id).finish()
             }
-            IPaneType::CodeDiff => {
-                ChildView::<PaneView<CodeDiffView>>::with_id(self.0.pane_view_id).finish()
-            }
-            IPaneType::EnvVarCollection => {
-                ChildView::<PaneView<EnvVarCollectionView>>::with_id(self.0.pane_view_id).finish()
-            }
-            IPaneType::EnvironmentManagement => {
-                ChildView::<PaneView<EnvironmentsPageView>>::with_id(self.0.pane_view_id).finish()
-            }
-            IPaneType::Workflow => {
-                ChildView::<PaneView<WorkflowView>>::with_id(self.0.pane_view_id).finish()
-            }
             IPaneType::Settings => {
                 ChildView::<PaneView<SettingsView>>::with_id(self.0.pane_view_id).finish()
-            }
-            IPaneType::AIFact => {
-                ChildView::<PaneView<AIFactView>>::with_id(self.0.pane_view_id).finish()
-            }
-            IPaneType::AIDocument => {
-                ChildView::<PaneView<AIDocumentView>>::with_id(self.0.pane_view_id).finish()
-            }
-            IPaneType::CustomRouterEditor => ChildView::<
-                PaneView<crate::ai::custom_model_router_editor::CustomRouterEditorView>,
-            >::with_id(self.0.pane_view_id)
-            .finish(),
-            IPaneType::ExecutionProfileEditor => {
-                ChildView::<PaneView<ExecutionProfileEditorView>>::with_id(self.0.pane_view_id)
-                    .finish()
-            }
-            IPaneType::GetStarted => {
-                ChildView::<PaneView<GetStartedView>>::with_id(self.0.pane_view_id).finish()
-            }
-            IPaneType::NetworkLog => {
-                ChildView::<PaneView<NetworkLogView>>::with_id(self.0.pane_view_id).finish()
             }
             IPaneType::DeferredPlaceholder => warpui::elements::Empty::new().finish(),
             #[cfg(test)]
@@ -547,22 +283,6 @@ pub enum DetachType {
 
     // Pane detached during a move.
     Moved,
-}
-
-pub enum ShareableLink {
-    /// The base app url should be used for the browser url bar
-    Base,
-    /// The url for the active pane to use for the browser url bar
-    Pane { url: Url },
-}
-
-#[derive(Debug)]
-pub enum ShareableLinkError {
-    /// An expected error occurred when attempting to get the shareable link of the active pane.
-    /// For example the pane is not yet in a state where it has a shareable link but will soon.
-    Expected,
-    /// An unexpected error while trying to get the shareable link of the active pane.
-    Unexpected(String),
 }
 
 /// The contents of a leaf pane.
@@ -625,16 +345,6 @@ pub trait PaneContent: 'static {
 
     /// Focus this pane's contents.
     fn focus(&self, ctx: &mut ViewContext<PaneGroup>);
-
-    /// Get the shareable link for the pane.
-    ///
-    /// This is called when the focused pane changes. It is used to get the link to the
-    /// for the active pane (if there is one). This link is used to update the browser's
-    /// url bar.
-    fn shareable_link(
-        &self,
-        ctx: &mut ViewContext<PaneGroup>,
-    ) -> Result<ShareableLink, ShareableLinkError>;
 
     /// Pane-agnostic state that all panes have.
     fn pane_configuration(&self) -> ModelHandle<PaneConfiguration>;
@@ -825,37 +535,6 @@ impl PaneConfiguration {
         ctx.emit(PaneConfigurationEvent::HeaderContentChanged);
     }
 
-    /// Sets the shareable object in the current pane. If `None`, the share button is removed.
-    pub fn set_shareable_object(
-        &mut self,
-        shareable_object: Option<ShareableObject>,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        ctx.emit(PaneConfigurationEvent::ShareableObjectChanged(
-            shareable_object,
-        ));
-    }
-
-    pub fn toggle_sharing_dialog(
-        &mut self,
-        source: SharingDialogSource,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        ctx.emit(PaneConfigurationEvent::ToggleSharingDialog(source));
-    }
-
-    pub fn open_sharing_qr_code(
-        &mut self,
-        source: SharingDialogSource,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        ctx.emit(PaneConfigurationEvent::OpenSharingQrCode(source));
-    }
-
-    pub fn notify_shared_session_link_changed(&mut self, ctx: &mut ModelContext<Self>) {
-        ctx.emit(PaneConfigurationEvent::SharedSessionLinkChanged);
-    }
-
     /// Notifies that the header content has changed and the pane header should re-render.
     /// Use this when the backing view's state has changed in a way that affects the header
     /// content returned by `render_header_content()`.
@@ -879,10 +558,6 @@ pub enum PaneConfigurationEvent {
     ShowAccentBorderUpdated,
     OpenModalUpdated,
     RefreshPaneHeaderOverflowMenuItems,
-    ShareableObjectChanged(Option<ShareableObject>),
-    ToggleSharingDialog(SharingDialogSource),
-    OpenSharingQrCode(SharingDialogSource),
-    SharedSessionLinkChanged,
     DimEvenIfFocusedUpdated,
     /// The header content has changed and should be re-rendered.
     /// This is used when the backing view's state changes in a way that
@@ -1012,7 +687,7 @@ pub trait BackingView: View {
 
     /// Processes the corresponding action when one of the
     /// overflow menu items is selected. Allows implementers
-    /// to add pre-/post-processing logic (e.g. telemetry).
+    /// to add pre-/post-processing logic.
     ///
     // Note: even if the [`PaneHeaderOverflowMenuAction`] was [`TypedActionView::Action`]
     // (assuming [`TypedActionView`] was one of the trait bounds for [`BackingView`]),
@@ -1092,7 +767,7 @@ pub trait BackingView: View {
     ///   is responsible for calling `PaneHeader::render_pane_header_draggable()` on appropriate elements
     fn render_header_content(
         &self,
-        ctx: &view::HeaderRenderContext<'_>,
+        ctx: &view::HeaderRenderContext,
         app: &AppContext,
     ) -> view::HeaderContent;
 
@@ -1119,15 +794,6 @@ pub enum PaneEvent {
     AppStateChanged,
     /// Repo for this pane's terminal has changed
     RepoChanged,
-    /// A remote server resolved the repo root for a session in this pane.
-    RemoteRepoNavigated {
-        remote_path: RemotePath,
-    },
-    /// Split the current pane into two. If `initial_query` is `Some` fill the new pane's input with
-    /// its value.
-    NewPaneInAIMode {
-        initial_query: Option<String>,
-    },
     ClearHoveredTabIndex,
     #[cfg(feature = "local_fs")]
     ReplaceWithCodePane {

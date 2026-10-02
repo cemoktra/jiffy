@@ -80,7 +80,7 @@ fn test_resolve_file_target_to_open_in_warp_never_leaves_warp() {
                 target,
                 FileTarget::CodeEditor(_) | FileTarget::MarkdownViewer(_)
             ),
-            "{path} must resolve to an in-Warp surface, got {target:?}"
+            "{path} must resolve to an in-Jiffy surface, got {target:?}"
         );
     }
 }

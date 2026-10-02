@@ -1,9 +1,12 @@
 use std::collections::HashMap;
 
 pub(crate) const WORKTREE_LIST_SEPARATOR: &str = "\u{1e}";
+/// First line of the branch-list output when the directory is a jj workspace.
+pub(crate) const JJ_OUTPUT_MARKER: &str = "\u{1f}jj";
 
 const ENCODED_VALUE_SEPARATOR: char = '\u{1f}';
 const WORKTREE_TAG: &str = "worktree";
+const JJ_BOOKMARK_TAG: &str = "jj";
 const GIT_BRANCH_REF_PREFIX: &str = "refs/heads/";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -11,6 +14,8 @@ pub(crate) struct GitBranchOnClickValue {
     pub(crate) branch_name: String,
     pub(crate) worktree_path: Option<String>,
     pub(crate) is_linked_worktree: bool,
+    /// Whether `branch_name` is a jj bookmark rather than a git branch.
+    pub(crate) is_jj_bookmark: bool,
 }
 
 impl GitBranchOnClickValue {
@@ -19,6 +24,7 @@ impl GitBranchOnClickValue {
             branch_name,
             worktree_path: None,
             is_linked_worktree: false,
+            is_jj_bookmark: false,
         }
     }
 
@@ -27,11 +33,24 @@ impl GitBranchOnClickValue {
             branch_name,
             worktree_path,
             is_linked_worktree: true,
+            is_jj_bookmark: false,
+        }
+    }
+
+    fn jj_bookmark(bookmark_name: String) -> Self {
+        Self {
+            is_jj_bookmark: true,
+            ..Self::new(bookmark_name)
         }
     }
 
     pub(crate) fn encode(&self) -> String {
-        if self.is_linked_worktree {
+        if self.is_jj_bookmark {
+            format!(
+                "{}{ENCODED_VALUE_SEPARATOR}{JJ_BOOKMARK_TAG}",
+                self.branch_name
+            )
+        } else if self.is_linked_worktree {
             match &self.worktree_path {
                 Some(path) => format!(
                     "{}{ENCODED_VALUE_SEPARATOR}{WORKTREE_TAG}{ENCODED_VALUE_SEPARATOR}{path}",
@@ -59,6 +78,7 @@ impl GitBranchOnClickValue {
                     .map(str::to_string);
                 Self::linked_worktree(branch_name, worktree_path)
             }
+            Some(JJ_BOOKMARK_TAG) => Self::jj_bookmark(branch_name),
             _ => Self::new(branch_name),
         }
     }
@@ -74,6 +94,10 @@ pub(crate) fn filter_git_branch_on_click_values(
     values_opt: Option<Vec<String>>,
 ) -> Option<Vec<String>> {
     values_opt.map(|values| {
+        if values.first().map(|value| value.trim()) == Some(JJ_OUTPUT_MARKER) {
+            return jj_on_click_values(&values[1..]);
+        }
+
         let worktree_list_separator_index = values
             .iter()
             .position(|value| value.trim() == WORKTREE_LIST_SEPARATOR);
@@ -110,6 +134,33 @@ pub(crate) fn filter_git_branch_on_click_values(
             })
             .collect()
     })
+}
+
+/// Converts jj output (bookmark names, a separator, then `name\troot` workspace lines) into menu
+/// values: bookmarks first, then workspaces to `cd` into.
+fn jj_on_click_values(lines: &[String]) -> Vec<String> {
+    let separator_index = lines
+        .iter()
+        .position(|line| line.trim() == WORKTREE_LIST_SEPARATOR)
+        .unwrap_or(lines.len());
+    let (bookmark_lines, workspace_lines) = lines.split_at(separator_index);
+
+    let bookmarks = bookmark_lines
+        .iter()
+        .map(|line| line.trim())
+        .filter(|name| !name.is_empty())
+        .map(|name| GitBranchOnClickValue::jj_bookmark(name.to_string()).encode());
+    let workspaces = workspace_lines.iter().skip(1).filter_map(|line| {
+        let (name, root) = line.trim().split_once('\t')?;
+        Some(
+            GitBranchOnClickValue::linked_worktree(
+                format!("{name} (workspace)"),
+                Some(root.to_string()),
+            )
+            .encode(),
+        )
+    });
+    bookmarks.chain(workspaces).collect()
 }
 
 fn parse_git_branch_line(line: &str) -> Option<ParsedGitBranchLine> {

@@ -1,0 +1,23 @@
+[Desktop Entry]
+# The version of the desktop entry spec this conforms to.
+Version=1.0
+
+Type=Application
+
+Name=Jiffy
+GenericName=TerminalEmulator
+
+Exec=jiffy %U
+StartupWMClass=dev.jiffy.Jiffy
+
+Keywords=shell;prompt;command;commandline;cmd;jj;
+
+Icon=dev.jiffy.Jiffy
+
+Categories=System;TerminalEmulator;
+
+# Don't run this application within a terminal.
+Terminal=false
+
+# Register ourselves as the handler for jiffy:// URLs.
+MimeType=x-scheme-handler/jiffy;

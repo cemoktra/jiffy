@@ -7,6 +7,9 @@ use warp_util::git::run_git_command;
 #[cfg(feature = "local_fs")]
 use warp_util::git::run_git_command_with_env;
 
+#[cfg(feature = "local_fs")]
+use crate::util::jj;
+
 #[cfg(test)]
 #[path = "git_tests.rs"]
 mod tests;
@@ -17,6 +20,9 @@ mod tests;
 /// Returns an empty set on any failure (not a git repo, git not found, etc.).
 #[cfg(feature = "local_fs")]
 pub fn list_local_branches_sync(repo_path: &Path) -> HashSet<String> {
+    if jj::is_jj_workspace(repo_path) {
+        return jj::list_workspace_and_bookmark_names_sync(repo_path);
+    }
     let output = command::blocking::Command::new("git")
         .args(["branch", "--list", "--format=%(refname:short)"])
         .current_dir(repo_path)
@@ -272,6 +278,9 @@ pub async fn get_file_change_entries(
     repo_path: &Path,
     include_unstaged: bool,
 ) -> Result<Vec<FileChangeEntry>> {
+    if jj::is_jj_workspace(repo_path) {
+        return crate::code_review::diff_state::jj::working_copy_file_entries(repo_path).await;
+    }
     let args: &[&str] = if include_unstaged {
         &["diff", "--numstat", "HEAD"]
     } else {
@@ -334,6 +343,9 @@ pub async fn get_file_change_entries(
 /// yet, or the branch shares no history with main).
 #[cfg(feature = "local_fs")]
 pub async fn get_committed_branch_file_entries(repo_path: &Path) -> Result<Vec<FileChangeEntry>> {
+    if jj::is_jj_workspace(repo_path) {
+        return crate::code_review::diff_state::jj::committed_branch_file_entries(repo_path).await;
+    }
     let main_branch = detect_main_branch(repo_path).await?;
     let merge_base =
         match run_git_command(repo_path, &["merge-base", "HEAD", main_branch.trim()]).await {
@@ -476,6 +488,9 @@ pub async fn get_unpushed_commits(
 /// caller treats "no upstream" and "detection failed" the same way.
 #[cfg(feature = "local_fs")]
 pub async fn compute_unpushed_state(repo_path: &Path) -> (Vec<Commit>, Option<String>) {
+    if jj::is_jj_workspace(repo_path) {
+        return crate::code_review::diff_state::jj::unpushed_state(repo_path).await;
+    }
     let current_branch = detect_current_branch(repo_path).await.ok();
     let upstream_ref = run_git_command(
         repo_path,
@@ -566,7 +581,11 @@ pub async fn get_diff_for_commit_message(
     repo_path: &Path,
     include_unstaged: bool,
 ) -> Result<String> {
-    let mut diff = if !include_unstaged {
+    // jj has no staging area: the working-copy change is exactly what gets committed.
+    let is_jj = jj::is_jj_workspace(repo_path);
+    let mut diff = if is_jj {
+        jj::working_copy_patch(repo_path).await?
+    } else if !include_unstaged {
         run_git_command(repo_path, &["diff", "--cached"]).await?
     } else if run_git_command(repo_path, &["rev-parse", "--verify", "HEAD"])
         .await
@@ -585,6 +604,7 @@ pub async fn get_diff_for_commit_message(
     // haven't been staged yet are invisible to it, so we synthesise diff hunks for
     // them here — mirroring the logic in `get_file_change_entries`.
     if include_unstaged
+        && !is_jj
         && let Ok(untracked) = run_git_command(
             repo_path,
             &["ls-files", "--others", "--exclude-standard", "-z"],
@@ -668,6 +688,9 @@ pub async fn run_commit(
     include_unstaged: bool,
     path_env: Option<&str>,
 ) -> Result<String> {
+    if jj::is_jj_workspace(repo_path) {
+        return jj::commit(repo_path, message, path_env).await;
+    }
     if include_unstaged {
         run_git_command_with_env(repo_path, &["add", "-A"], path_env).await?;
     }
@@ -706,6 +729,9 @@ pub async fn run_commit(
 /// `path_env` is forwarded so the LFS `pre-push` hook can find `git-lfs`.
 #[cfg(feature = "local_fs")]
 pub async fn run_push(repo_path: &Path, branch: &str, path_env: Option<&str>) -> Result<String> {
+    if jj::is_jj_workspace(repo_path) {
+        return jj::push_bookmark(repo_path, branch, path_env).await;
+    }
     run_git_command_with_env(
         repo_path,
         &["push", "--set-upstream", "origin", branch],
@@ -849,31 +875,34 @@ async fn run_gh_command(repo_path: &Path, args: &[&str], path_env: Option<&str>)
 /// (auth, network, gh not installed).
 #[cfg(feature = "local_fs")]
 pub async fn get_pr_for_branch(repo_path: &Path, path_env: Option<&str>) -> Result<Option<PrInfo>> {
-    if run_git_command(repo_path, &["rev-parse", "--is-inside-work-tree"])
-        .await
-        .is_err()
-    {
-        return Ok(None);
-    }
+    // jj keeps git's HEAD detached, so look the PR up by the working-copy bookmark instead.
+    let jj_bookmark = if jj::is_jj_workspace(repo_path) {
+        let Some(bookmark) = jj::working_copy_bookmark(repo_path).await else {
+            return Ok(None);
+        };
+        Some(bookmark)
+    } else {
+        if run_git_command(repo_path, &["rev-parse", "--is-inside-work-tree"])
+            .await
+            .is_err()
+        {
+            return Ok(None);
+        }
 
-    if run_git_command(repo_path, &["symbolic-ref", "--quiet", "--short", "HEAD"])
-        .await
-        .is_err()
-    {
-        return Ok(None);
+        if run_git_command(repo_path, &["symbolic-ref", "--quiet", "--short", "HEAD"])
+            .await
+            .is_err()
+        {
+            return Ok(None);
+        }
+        None
+    };
+    let mut args = vec!["pr", "view"];
+    if let Some(bookmark) = &jj_bookmark {
+        args.push(bookmark);
     }
-    match run_gh_command(
-        repo_path,
-        &[
-            "pr",
-            "view",
-            "--json",
-            "number,url,state,isDraft,baseRefName",
-        ],
-        path_env,
-    )
-    .await
-    {
+    args.extend(["--json", "number,url,state,isDraft,baseRefName"]);
+    match run_gh_command(repo_path, &args, path_env).await {
         Ok(stdout) => {
             let parsed: serde_json::Value = serde_json::from_str(stdout.trim())
                 .map_err(|e| anyhow!("Failed to parse gh output: {e}"))?;
@@ -976,22 +1005,26 @@ pub fn is_gh_missing_error(error_msg: &str) -> bool {
 /// truncated for AI token limits.
 #[cfg(feature = "local_fs")]
 pub async fn get_diff_for_pr(repo_path: &Path) -> Result<String> {
-    let base = detect_main_branch(repo_path).await?;
-    let base = base.trim();
-    let current = detect_current_branch(repo_path).await?;
-    let remote_ref = format!("origin/{current}");
-
-    let end_ref = if run_git_command(repo_path, &["rev-parse", "--verify", &remote_ref])
-        .await
-        .is_ok()
-    {
-        remote_ref
+    let mut diff = if jj::is_jj_workspace(repo_path) {
+        jj::branch_patch(repo_path).await?
     } else {
-        "HEAD".to_string()
-    };
+        let base = detect_main_branch(repo_path).await?;
+        let base = base.trim();
+        let current = detect_current_branch(repo_path).await?;
+        let remote_ref = format!("origin/{current}");
 
-    let range = format!("{base}..{end_ref}");
-    let mut diff = run_git_command(repo_path, &["diff", &range]).await?;
+        let end_ref = if run_git_command(repo_path, &["rev-parse", "--verify", &remote_ref])
+            .await
+            .is_ok()
+        {
+            remote_ref
+        } else {
+            "HEAD".to_string()
+        };
+
+        let range = format!("{base}..{end_ref}");
+        run_git_command(repo_path, &["diff", &range]).await?
+    };
     if diff.len() > MAX_DIFF_CHARS_FOR_AI {
         diff = format!(
             "{}\n... (diff truncated)",
@@ -1009,6 +1042,9 @@ pub async fn get_diff_for_pr(_repo_path: &Path) -> Result<String> {
 /// Commit subject lines on the current branch since the default branch.
 #[cfg(feature = "local_fs")]
 pub async fn get_branch_commit_messages(repo_path: &Path) -> Result<Vec<String>> {
+    if jj::is_jj_workspace(repo_path) {
+        return jj::branch_commit_messages(repo_path).await;
+    }
     let base = detect_main_branch(repo_path).await?;
     let base = base.trim();
     let range = format!("{base}..HEAD");
@@ -1035,11 +1071,24 @@ pub async fn create_pr(
     body: Option<&str>,
     path_env: Option<&str>,
 ) -> Result<PrInfo> {
-    let base = detect_main_branch(repo_path).await?;
+    // jj keeps git's HEAD detached, so gh needs the pushed bookmark as the explicit head.
+    let jj_bookmark = if jj::is_jj_workspace(repo_path) {
+        Some(
+            jj::working_copy_bookmark(repo_path)
+                .await
+                .ok_or_else(|| anyhow!("Push a bookmark before creating a pull request"))?,
+        )
+    } else {
+        None
+    };
+    let base = match &jj_bookmark {
+        Some(_) => jj::trunk_name(repo_path).await,
+        None => detect_main_branch(repo_path).await?,
+    };
     let base = base.trim();
     let base = base.strip_prefix("origin/").unwrap_or(base);
     let sanitized_title;
-    let args: Vec<&str> = match (title, body) {
+    let mut args: Vec<&str> = match (title, body) {
         (Some(t), Some(b)) => {
             sanitized_title = sanitize_pr_title(t);
             vec![
@@ -1055,6 +1104,9 @@ pub async fn create_pr(
         }
         _ => vec!["pr", "create", "--base", base, "--fill"],
     };
+    if let Some(bookmark) = &jj_bookmark {
+        args.extend(["--head", bookmark.as_str()]);
+    }
     let stdout = run_gh_command(repo_path, &args, path_env).await?;
     // `gh pr create` prints the PR URL on success.
     let url = stdout.trim().to_string();
@@ -1104,6 +1156,10 @@ pub async fn get_all_branches(
     max_branch_count: Option<usize>,
     include_remotes: bool,
 ) -> Result<Vec<BranchEntry>> {
+    #[cfg(feature = "local_fs")]
+    if jj::is_jj_workspace(repo_path) {
+        return jj::list_bookmarks_or_parent(repo_path).await;
+    }
     let main_branch = match detect_main_branch(repo_path).await {
         Ok(branch) => branch,
         Err(err) => {
@@ -1125,6 +1181,10 @@ pub async fn get_all_branches_with_known_main(
     max_branch_count: Option<usize>,
     include_remotes: bool,
 ) -> Result<Vec<BranchEntry>> {
+    #[cfg(feature = "local_fs")]
+    if jj::is_jj_workspace(repo_path) {
+        return jj::list_bookmarks_or_parent(repo_path).await;
+    }
     fetch_branch_list_with_main(repo_path, main_branch, max_branch_count, include_remotes).await
 }
 

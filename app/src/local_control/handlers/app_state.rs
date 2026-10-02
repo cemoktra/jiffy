@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 
 use ::local_control::protocol::{
     Direction as ControlDirection, DirectionParams, FileOpenParams, PageQueryParams, QueryParams,
-    ResizeParams, TabActivateParams, TabActivationMode, TabCreateParams, TabTarget, TabType,
-    TargetSelector, TextParams,
+    ResizeParams, TabActivateParams, TabActivationMode, TabCreateParams, TabTarget, TargetSelector,
+    TextParams,
 };
 use ::local_control::{ActionKind, ControlError, ErrorCode, InstanceId};
 use serde_json::json;
@@ -31,9 +31,8 @@ use crate::local_control::resolver::{
     input_target_pane_id, reject_target_families, tab_index_from_target, target_pane_group,
     target_pane_id, target_session_pane_id, target_window_id_for_target, target_workspace,
 };
-use crate::palette::PaletteMode;
+use crate::palette::{PaletteMode, PaletteSource};
 use crate::pane_group::{ActivationReason, Direction, PaneGroupAction};
-use crate::server::telemetry::PaletteSource;
 use crate::settings_view::SettingsSection;
 #[cfg(feature = "local_fs")]
 use crate::util::file::external_editor::EditorSettings;
@@ -83,22 +82,6 @@ pub(crate) fn handle(
             target,
             ctx,
         ),
-        ActionKind::SurfaceWarpDriveOpen => surface_workspace_action(
-            instance_id,
-            action,
-            SurfaceDestination::WarpDrive,
-            WorkspaceAction::OpenWarpDrive,
-            target,
-            ctx,
-        ),
-        ActionKind::SurfaceAgentManagementOpen => surface_workspace_action(
-            instance_id,
-            action,
-            SurfaceDestination::AgentManagement,
-            WorkspaceAction::OpenAgentManagementView,
-            target,
-            ctx,
-        ),
         ActionKind::SessionNext => workspace_action(
             instance_id,
             action,
@@ -122,27 +105,6 @@ pub(crate) fn handle(
             surface_command_search_open(instance_id, params, target, ctx)
         }
         ActionKind::SurfaceThemePickerOpen => surface_theme_picker_open(instance_id, target, ctx),
-        ActionKind::SurfaceWarpDriveToggle => workspace_action(
-            instance_id,
-            action,
-            WorkspaceAction::ToggleWarpDrive,
-            target,
-            ctx,
-        ),
-        ActionKind::SurfaceResourceCenterToggle => workspace_action(
-            instance_id,
-            action,
-            WorkspaceAction::ToggleResourceCenter,
-            target,
-            ctx,
-        ),
-        ActionKind::SurfaceAiAssistantToggle => workspace_action(
-            instance_id,
-            action,
-            WorkspaceAction::ToggleAIAssistant,
-            target,
-            ctx,
-        ),
         ActionKind::SurfaceCodeReviewOpen => surface_code_review_open(instance_id, target, ctx),
         ActionKind::SurfaceCodeReviewToggle | ActionKind::SurfaceRightPanelToggle => {
             workspace_action(
@@ -166,14 +128,6 @@ pub(crate) fn handle(
             action,
             SurfaceDestination::GlobalSearch,
             WorkspaceAction::OpenGlobalSearch,
-            target,
-            ctx,
-        ),
-        ActionKind::SurfaceConversationListOpen => surface_workspace_action(
-            instance_id,
-            action,
-            SurfaceDestination::ConversationList,
-            WorkspaceAction::OpenConversationListView,
             target,
             ctx,
         ),
@@ -237,16 +191,8 @@ fn window_create(
             || target.session.is_some(),
         "target selectors",
     )?;
-    let params = decode_params::<TabCreateParams>(params)?;
-    match params.tab_type {
-        None | Some(TabType::Terminal | TabType::Default) => {}
-        Some(TabType::Agent | TabType::CloudAgent) => {
-            return Err(ControlError::new(
-                ErrorCode::UnsupportedAction,
-                "window.create only supports terminal or default window types",
-            ));
-        }
-    }
+    // Every tab type opens a regular window, so the params only need to be valid.
+    decode_params::<TabCreateParams>(params)?;
     ctx.dispatch_global_action("root_view:open_new", ());
     Ok(ack(instance_id, ActionKind::WindowCreate))
 }
@@ -687,12 +633,6 @@ fn settings_section(page: String) -> Result<SettingsSection, ControlError> {
             format!("surface.settings.open cannot resolve settings page {page:?}"),
         )
     })?;
-    if section == SettingsSection::WarpDrive {
-        return Err(ControlError::new(
-            ErrorCode::UnsupportedAction,
-            "surface.settings.open does not open Warp Drive settings",
-        ));
-    }
     Ok(section)
 }
 
@@ -710,7 +650,7 @@ fn surface_palette_open(
         action_kind,
         WorkspaceAction::OpenPalette {
             mode,
-            source: PaletteSource::Keybinding,
+            source: PaletteSource::Other,
             query,
         },
         target,

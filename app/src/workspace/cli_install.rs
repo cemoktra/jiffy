@@ -225,17 +225,17 @@ pub fn install_warpctrl() -> Result<()> {
 
     if !warpctrl_source.exists() {
         return Err(anyhow!(
-            "Cannot install Warp Control CLI: bundled wrapper not found at {}",
+            "Cannot install Jiffy Control CLI: bundled wrapper not found at {}",
             warpctrl_source.display()
         ));
     }
 
-    install_symlink(&warpctrl_source, &warpctrl_path, "Warp Control CLI")
+    install_symlink(&warpctrl_source, &warpctrl_path, "Jiffy Control CLI")
 }
 
 /// Uninstall the Warp Control CLI by removing the symlink from /usr/local/bin
 pub fn uninstall_warpctrl() -> Result<()> {
-    uninstall_symlink(&warpctrl_install_target_path(), "Warp Control command")
+    uninstall_symlink(&warpctrl_install_target_path(), "Jiffy Control command")
 }
 
 #[cfg(test)]

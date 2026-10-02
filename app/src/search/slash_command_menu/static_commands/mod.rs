@@ -10,40 +10,17 @@ bitflags! {
     ///
     /// Each flag represents a requirement that the session context must satisfy. The command is
     /// available when the session supports *all* of the command's requirement flags.
-    ///
-    /// A few common cases:
-    /// * If neither [`Self::AGENT_VIEW`] nor [`Self::TERMINAL_VIEW`] is set, the command is available in all modes.
-    ///   A command should *not* set both flags to be available in both modes - this results in requirements that cannot be satisfied.
-    /// * Most `/fork`-like slash commands require [`Self::NO_LRC_CONTROL`] and [`Self::ACTIVE_CONVERSATION`]
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub struct Availability: u16 {
+    pub struct Availability: u8 {
         /// No requirements — always available.
         const ALWAYS = 0;
-        /// Requires the agent view.
-        const AGENT_VIEW = 1 << 0;
-        /// Requires the terminal view.
-        const TERMINAL_VIEW = 1 << 1;
-        /// Requires a local session (not available in remote/cloud sessions).
-        const LOCAL = 1 << 2;
+        /// Requires a local session (not available in remote sessions).
+        const LOCAL = 1 << 0;
         /// Requires a git repository.
-        const REPOSITORY = 1 << 3;
-        /// Requires that the agent is not currently in control of a long-running command.
-        const NO_LRC_CONTROL = 1 << 4;
-        /// Requires an active AI conversation.
-        const ACTIVE_CONVERSATION = 1 << 5;
-        /// Requires codebase context to be enabled.
-        const CODEBASE_CONTEXT = 1 << 6;
-        /// Requires AI to be globally enabled.
-        const AI_ENABLED = 1 << 7;
-        /// Requires a non-cloud-agent context.
-        const NOT_CLOUD_AGENT = 1 << 8;
-        /// Requires a cloud-agent context.
-        const CLOUD_AGENT = 1 << 9;
-        /// Set on the session context iff the slash command data source was constructed via
-        /// `SlashCommandDataSource::for_cloud_mode_v2` *and* `FeatureFlag::CloudModeInputV2`
-        /// is enabled. Commands that require this bit are hidden everywhere except the V2
-        /// cloud-mode composing input.
-        const CLOUD_MODE_V2_COMPOSER = 1 << 10;
+        const REPOSITORY = 1 << 1;
+        /// Requires the CLI agent rich input to be open. While it is open, only commands with
+        /// this requirement are available.
+        const CLI_AGENT_INPUT = 1 << 2;
     }
 }
 /// Stable identity for a static slash command.
@@ -51,73 +28,15 @@ bitflags! {
 /// Front-ends dispatch on this value instead of matching command-name strings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SlashCommandKind {
-    Agent,
-    CloudAgent,
-    AddMcp,
-    ApiKeys,
-    ConnectGrok,
-    Upgrade,
-    ManageBilling,
-    AutoApprove,
-    Statusline,
-    ResetStatusline,
-    Mcp,
-    ViewLogs,
-    Voice,
-    NaturalLanguageDetection,
-    Theme,
-    Exit,
-    Logout,
-    CreateEnvironment,
     CreateDockerSandbox,
-    CreateNewProject,
     EditSkill,
     InvokeSkill,
-    AddPrompt,
-    AddRule,
     Edit,
     RenameTab,
-    RenameConversation,
     SetTabColor,
-    Fork,
-    MoveToCloud,
     OpenCodeReview,
-    Index,
-    Init,
-    OpenProjectRules,
-    OpenMcpServers,
     OpenSettingsFile,
-    Changelog,
     Feedback,
-    OpenRepo,
-    OpenRules,
-    New,
-    Clear,
-    Model,
-    Team,
-    Host,
-    Harness,
-    Environment,
-    Profile,
-    Plan,
-    Orchestrate,
-    Compact,
-    CompactAnd,
-    Queue,
-    ForkAndCompact,
-    ForkFrom,
-    ContinueLocally,
-    Usage,
-    RemoteControl,
-    Cost,
-    Conversations,
-    Prompts,
-    Rewind,
-    ExportToClipboard,
-    ExportToFile,
-    VimMode,
-    Status,
-    CopyDebuggingId,
 }
 
 /// The application surfaces on which a static slash command is implemented.
@@ -204,9 +123,6 @@ pub struct StaticCommand {
     pub supported_surfaces: SlashCommandSurfaces,
     /// Specifies the requirements for this command to be available. See [`Availability`].
     pub availability: Availability,
-    /// Whether this command requires AI mode when executed.
-    /// If true, AI mode will be activated when the command is accepted.
-    pub auto_enter_ai_mode: bool,
     pub argument: Option<Argument>,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]

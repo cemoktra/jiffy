@@ -17,12 +17,10 @@ use warp_completer::completer::{
 use warp_completer::signatures::CommandRegistry;
 use warp_core::features::FeatureFlag;
 use warp_util::path::{EscapeChar, ShellFamily};
-use warpui::{AppContext, SingletonEntity};
 
 use crate::safe_warn;
 use crate::terminal::model::session::{ExecuteCommandOptions, Session, SessionType};
 use crate::util::AsciiDebug;
-use crate::workflows::aliases::WorkflowAliases;
 
 lazy_static! {
     pub static ref CURR_DIRECTORY_ENTRY: EngineDirEntry = EngineDirEntry {
@@ -45,9 +43,6 @@ pub struct SessionContext {
     /// Directory listings keyed by absolute path. Callers that must reflect a directory's
     /// current contents should use `refresh_directory_entries` to re-read from disk.
     cached_directory_entries: Arc<dashmap::DashMap<TypedPathBuf, Arc<Vec<EngineDirEntry>>>>,
-
-    /// Snapshot of all Warp workflow aliases.
-    workflow_aliases: HashMap<String, String>,
 }
 
 impl SessionContext {
@@ -111,7 +106,7 @@ impl SessionContext {
                     .filter_map(|res| res.and_then(EngineDirEntry::try_from).ok())
                     .collect::<Vec<_>>()
             }
-            SessionType::WarpifiedRemote { .. } => {
+            SessionType::WarpifiedRemote => {
                 let env_vars = self
                     .session
                     .path()
@@ -253,11 +248,7 @@ impl CompletionContext for SessionContext {
     }
 
     fn top_level_commands(&self) -> Box<dyn Iterator<Item = &str> + '_> {
-        Box::new(
-            self.session
-                .top_level_commands()
-                .chain(self.workflow_aliases.keys().map(String::as_str)),
-        )
+        Box::new(self.session.top_level_commands())
     }
 
     fn command_case_sensitivity(&self) -> TopLevelCommandCaseSensitivity {
@@ -269,23 +260,16 @@ impl CompletionContext for SessionContext {
     }
 
     fn aliases(&self) -> Box<dyn Iterator<Item = (&str, &str)> + '_> {
-        let session_aliases = self
-            .session
-            .aliases()
-            .iter()
-            .map(|(alias, command)| (alias.as_str(), command.as_str()));
-        let workflow_aliases = self
-            .workflow_aliases
-            .iter()
-            .map(|(alias, command)| (alias.as_str(), command.as_str()));
-        Box::new(workflow_aliases.chain(session_aliases))
+        Box::new(
+            self.session
+                .aliases()
+                .iter()
+                .map(|(alias, command)| (alias.as_str(), command.as_str())),
+        )
     }
 
     fn alias_command(&self, alias: &str) -> Option<&str> {
-        self.workflow_aliases
-            .get(alias)
-            .or_else(|| self.session.aliases().get(alias))
-            .map(Deref::deref)
+        self.session.aliases().get(alias).map(Deref::deref)
     }
 
     fn abbreviations(&self) -> Option<&HashMap<SmolStr, String>> {
@@ -322,20 +306,12 @@ impl SessionContext {
         session: impl Into<Arc<Session>>,
         command_registry: Arc<CommandRegistry>,
         current_working_directory: TypedPathBuf,
-        ctx: &AppContext,
     ) -> Self {
-        let workflow_aliases = if FeatureFlag::WorkflowAliases.is_enabled() {
-            WorkflowAliases::as_ref(ctx).autocomplete_data(ctx)
-        } else {
-            Default::default()
-        };
-
         Self {
             session: session.into(),
             command_registry,
             current_working_directory,
             cached_directory_entries: Arc::new(Default::default()),
-            workflow_aliases,
         }
     }
 }
@@ -363,41 +339,6 @@ impl CompletionContext for SessionAgnosticContext {
 
     fn command_registry(&self) -> &CommandRegistry {
         &self.command_registry
-    }
-
-    fn environment_variable_names(&self) -> Option<&HashSet<SmolStr>> {
-        None
-    }
-
-    fn shell_supports_autocd(&self) -> Option<bool> {
-        None
-    }
-
-    fn path_completion_context(&self) -> Option<&dyn PathCompletionContext> {
-        None
-    }
-
-    fn generator_context(&self) -> Option<&dyn GeneratorContext> {
-        None
-    }
-}
-
-/// Empty `CompletionContext` used in places without a live shell session
-/// (i.e. shared session viewers without a real terminal instance).
-#[derive(Clone)]
-pub struct EmptyCompletionContext;
-impl EmptyCompletionContext {
-    pub fn new() -> Self {
-        Self
-    }
-}
-impl CompletionContext for EmptyCompletionContext {
-    fn top_level_commands(&self) -> Box<dyn Iterator<Item = &str> + '_> {
-        Box::new(std::iter::empty())
-    }
-
-    fn command_registry(&self) -> &CommandRegistry {
-        &EMPTY_COMMAND_REGISTRY
     }
 
     fn environment_variable_names(&self) -> Option<&HashSet<SmolStr>> {

@@ -14,10 +14,10 @@ use repo_metadata::file_tree_store::{
 use repo_metadata::local_model::IndexedRepoState;
 use repo_metadata::repositories::DetectedRepositories;
 use repo_metadata::{FileTreeEntry, RepoMetadataModel};
+use warp_core::HostId;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::Fill;
 use warp_core::ui::theme::color::internal_colors;
-use warp_core::{HostId, send_telemetry_from_ctx};
 use warp_util::path::LineAndColumnArg;
 use warp_util::standardized_path::StandardizedPath;
 use warpui::clipboard::ClipboardContent;
@@ -44,9 +44,6 @@ use crate::code::buffer_location::LocalOrRemotePath;
 use crate::coding_panel_enablement_state::CodingPanelEnablementState;
 use crate::editor::{EditorOptions, EditorView, TextOptions};
 use crate::menu::{Menu, MenuItem, MenuItemFields};
-#[cfg(feature = "local_fs")]
-use crate::server::telemetry::CodePanelsFileOpenEntrypoint;
-use crate::server::telemetry::TelemetryEvent;
 use crate::terminal::input::InputDropTargetData;
 use crate::terminal::view::{TerminalDropTargetData, TerminalView};
 use crate::ui_components::icons::Icon;
@@ -1401,16 +1398,6 @@ impl FileTreeView {
         target_item: &FileTreeEntryState,
         ctx: &mut ViewContext<Self>,
     ) {
-        // Check if this is a remote-backed root.
-        if self
-            .root_directories
-            .get(root_path)
-            .is_some_and(|r| r.is_remote())
-        {
-            self.load_remote_directory(root_path, target_item, ctx);
-            return;
-        }
-
         let Some(root_dir) = self.root_directories.get(root_path) else {
             return;
         };
@@ -1440,50 +1427,6 @@ impl FileTreeView {
         {
             root_dir.entry = state.entry.clone();
         }
-    }
-
-    /// Sends a `LoadRepoMetadataDirectory` request to the remote server for
-    /// an unloaded subdirectory. The response flows back through
-    /// `RepoMetadataEvent::FileTreeEntryUpdated { Remote }` which rebuilds
-    /// the view automatically.
-    #[cfg(feature = "local_fs")]
-    fn load_remote_directory(
-        &self,
-        root_path: &StandardizedPath,
-        target_item: &FileTreeEntryState,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        use crate::remote_server::manager::RemoteServerManager;
-
-        if !FeatureFlag::SshRemoteServer.is_enabled() {
-            return;
-        }
-
-        let Some(root_dir) = self.root_directories.get(root_path) else {
-            return;
-        };
-        let repo_root = root_dir.entry.root_directory().to_string();
-        let dir_path = target_item.path().to_string();
-        let Some(host_id) = root_dir.remote_host_id.as_ref() else {
-            log::warn!("load_remote_directory: no host_id for {root_path}");
-            return;
-        };
-
-        // Find a connected session for the host that owns this remote root.
-        let mgr = RemoteServerManager::as_ref(ctx);
-        let Some(sessions) = mgr.sessions_for_host(host_id) else {
-            log::warn!("load_remote_directory: no sessions for host {host_id}");
-            return;
-        };
-        // Any session for this host suffices – they all share the same remote
-        // server process, so any one of them can service the request.
-        let Some(&session_id) = sessions.iter().next() else {
-            return;
-        };
-
-        RemoteServerManager::handle(ctx).update(ctx, |mgr, ctx| {
-            mgr.load_remote_repo_metadata_directory(session_id, repo_root, dir_path, ctx);
-        });
     }
 
     #[cfg(not(feature = "local_fs"))]
@@ -2225,14 +2168,6 @@ impl FileTreeView {
             )
         };
 
-        send_telemetry_from_ctx!(
-            TelemetryEvent::CodePanelsFileOpened {
-                entrypoint: CodePanelsFileOpenEntrypoint::ProjectExplorer,
-                target: target.clone(),
-            },
-            ctx
-        );
-
         ctx.emit(FileTreeEvent::OpenFile {
             path: LocalOrRemotePath::Local(path.to_path_buf()),
             target,
@@ -2483,19 +2418,13 @@ impl FileTreeView {
         let Some(root_dir) = self.root_directories.get(&id.root) else {
             return;
         };
-        let Some(item) = root_dir.items.get(id.index) else {
+        if root_dir.items.get(id.index).is_none() {
             return;
-        };
+        }
 
         let Some(relative_path) = self.relative_path_for_item(id) else {
             return;
         };
-
-        let is_directory = matches!(item, FileTreeItem::DirectoryHeader { .. });
-        send_telemetry_from_ctx!(
-            TelemetryEvent::FileTreeItemAttachedAsContext { is_directory },
-            ctx
-        );
 
         ctx.emit(FileTreeEvent::AttachAsContext {
             path: relative_path,
@@ -2953,28 +2882,11 @@ impl View for FileTreeView {
             return self.render_error_state(DISABLED_TEXT.to_string(), app);
         }
 
-        if matches!(
-            self.enablement,
-            CodingPanelEnablementState::PendingRemoteSession
-        ) {
-            return self.render_loading_state(app);
+        if matches!(self.enablement, CodingPanelEnablementState::RemoteSession) {
+            return self.render_error_state(REMOTE_TEXT.to_string(), app);
         }
 
         if self.displayed_directories.is_empty() {
-            if let CodingPanelEnablementState::RemoteSession { has_remote_server } = self.enablement
-            {
-                // When the session has a remote server connection (Auto SSH
-                // Warpification / mode 1), show a loading state — the server
-                // may push repo metadata momentarily. For other SSH modes
-                // (tmux, subshell) no data will arrive, so show the disabled
-                // error instead.
-                return if has_remote_server {
-                    self.render_loading_state(app)
-                } else {
-                    self.render_error_state(REMOTE_TEXT.to_string(), app)
-                };
-            }
-
             if matches!(
                 self.enablement,
                 CodingPanelEnablementState::UnsupportedSession

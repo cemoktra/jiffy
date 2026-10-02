@@ -1,7 +1,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use ai::agent::action::InsertReviewComment;
 use chrono::Local;
 use lsp::LspManagerModel;
 use repo_metadata::repositories::DetectedRepositories;
@@ -15,35 +14,25 @@ use warpui::{App, ViewHandle};
 
 use super::*;
 use crate::NotebookKeybindings;
-use crate::ai::persisted_workspace::PersistedWorkspace;
-use crate::ai::request_usage_model::AIRequestUsageModel;
-use crate::auth::AuthStateProvider;
-use crate::cloud_object::model::persistence::CloudModel;
 use crate::code::buffer_location::LocalOrRemotePath;
 use crate::code::editor::view::{CodeEditorRenderOptions, CodeEditorView};
 use crate::code::local_code_editor::LocalCodeEditorView;
 use crate::code_review::GlobalCodeReviewModel;
 use crate::code_review::comments::{
-    AttachedReviewComment, AttachedReviewCommentTarget, CommentId, CommentOrigin,
-    ImportedCommentDetails, LineDiffContent, PendingImportedReviewComment,
-    PendingImportedReviewCommentTarget, attach_pending_imported_comments,
+    AttachedReviewComment, AttachedReviewCommentTarget, CommentId, LineDiffContent,
 };
 use crate::code_review::diff_size_limits::DiffSize;
 use crate::code_review::diff_state::{DiffStateModel, FileDiff, GitFileStatus};
 use crate::code_review::editor_state::CodeReviewEditorState;
 use crate::code_review::git_repo_model::GitRepoModels;
 use crate::pane_group::WorkingDirectoriesModel;
-use crate::server::server_api::ServerApiProvider;
-use crate::server::server_api::team::MockTeamClient;
-use crate::server::server_api::workspace::MockWorkspaceClient;
-use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
+use crate::persisted_workspace::PersistedWorkspace;
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::terminal::local_shell::LocalShellState;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::vim_registers::VimRegisters;
 use crate::workspace::ActiveSession;
 use crate::workspace::sync_inputs::SyncedInputState;
-use crate::workspaces::user_workspaces::UserWorkspaces;
 
 #[derive(Default)]
 struct TestView;
@@ -69,8 +58,6 @@ impl warpui::TypedActionView for TestView {
 /// Initialize required singletons for testing
 fn initialize_test_app(app: &mut App) {
     initialize_settings_for_tests(app);
-    app.add_singleton_model(|_| AuthStateProvider::new_for_test());
-    app.add_singleton_model(AppTelemetryContextProvider::new_context_provider);
     app.add_singleton_model(|_| Appearance::mock());
     app.add_singleton_model(|_| SyncedInputState::mock());
     app.add_singleton_model(|_| VimRegisters::new());
@@ -81,23 +68,10 @@ fn initialize_test_app(app: &mut App) {
     app.add_singleton_model(|_| LocalShellState::NotLoaded);
     app.add_singleton_model(PersistedWorkspace::new_for_test);
     app.add_singleton_model(|_| GlobalCodeReviewModel);
-    app.add_singleton_model(|ctx| {
-        UserWorkspaces::mock(
-            Arc::new(MockTeamClient::new()),
-            Arc::new(MockWorkspaceClient::new()),
-            vec![],
-            ctx,
-        )
-    });
 
     // Add mocks required by rich text editor (used in the CommentEditor)
-    app.add_singleton_model(CloudModel::mock);
     app.add_singleton_model(|_| ActiveSession::default());
     app.add_singleton_model(NotebookKeybindings::new);
-    app.add_singleton_model(|_| ServerApiProvider::new_for_test());
-    app.add_singleton_model(|ctx| {
-        AIRequestUsageModel::new_for_test(ServerApiProvider::as_ref(ctx).get_ai_client(), ctx)
-    });
 }
 
 /// Creates a LocalCodeEditorView with the given content
@@ -117,7 +91,7 @@ fn create_editor_with_content(app: &mut App, content: &str) -> ViewHandle<LocalC
             editor.reset(InitialBufferState::plain_text(&content), ctx);
         });
 
-        LocalCodeEditorView::new(code_editor_view, None, false, None, ctx)
+        LocalCodeEditorView::new(code_editor_view, ctx)
     });
 
     local_editor
@@ -147,7 +121,7 @@ fn create_editor_with_diff(
             editor.set_base(&base, true, ctx);
         });
 
-        LocalCodeEditorView::new(code_editor_view, None, false, None, ctx)
+        LocalCodeEditorView::new(code_editor_view, ctx)
     });
 
     local_editor
@@ -180,46 +154,6 @@ fn create_line_comment(
         base: None,
         head: None,
         outdated: false,
-        origin: CommentOrigin::Native,
-    }
-}
-
-/// Creates an imported (from GitHub) line comment whose stored `content` is the
-/// raw unified-diff line, including its one-char marker. `raw_diff_content`
-/// should therefore carry the leading `+`/`-`/space (e.g. `" line 2"` for a
-/// context line, `"+added"` for an addition).
-fn create_imported_line_comment(
-    file_path: impl Into<PathBuf>,
-    line_number: usize,
-    raw_diff_content: &str,
-    comment_content: &str,
-) -> AttachedReviewComment {
-    let line_count = LineCount::from(line_number);
-    AttachedReviewComment {
-        id: CommentId::new(),
-        content: comment_content.to_string(),
-        target: AttachedReviewCommentTarget::Line {
-            absolute_file_path: LocalOrRemotePath::Local(file_path.into()),
-            line: EditorLineLocation::Current {
-                line_number: line_count,
-                line_range: line_count..LineCount::from(line_number + 1),
-            },
-            content: LineDiffContent {
-                content: raw_diff_content.to_string(),
-                lines_added: LineCount::from(0),
-                lines_removed: LineCount::from(0),
-            },
-        },
-        last_update_time: Local::now(),
-        base: None,
-        head: None,
-        outdated: false,
-        origin: CommentOrigin::ImportedFromGitHub(ImportedCommentDetails {
-            author: "reviewer".to_string(),
-            github_comment_id: "1".to_string(),
-            github_parent_id: None,
-            html_url: None,
-        }),
     }
 }
 
@@ -238,7 +172,6 @@ fn create_file_comment(
         base: None,
         head: None,
         outdated: false,
-        origin: CommentOrigin::Native,
     }
 }
 
@@ -252,33 +185,7 @@ fn create_general_comment(comment_content: &str) -> AttachedReviewComment {
         base: None,
         head: None,
         outdated: false,
-        origin: CommentOrigin::Native,
     }
-}
-
-fn make_pending_comment(
-    id: &str,
-    author: &str,
-    body: &str,
-    parent_id: Option<&str>,
-    timestamp: &str,
-    target: PendingImportedReviewCommentTarget,
-) -> PendingImportedReviewComment {
-    let mut pending = PendingImportedReviewComment::try_from(InsertReviewComment {
-        comment_id: id.to_string(),
-        author: author.to_string(),
-        comment_body: body.to_string(),
-        parent_comment_id: parent_id.map(|s| s.to_string()),
-        last_modified_timestamp: timestamp.to_string(),
-        comment_location: None,
-        html_url: None,
-    })
-    .expect("valid pending import conversion");
-
-    // Override the location target since we intentionally use `comment_location: None` above.
-    pending.target = target;
-
-    pending
 }
 
 use crate::view_components::action_button::{ActionButton, NakedTheme};
@@ -389,16 +296,13 @@ fn test_relocate_comments_empty_input() {
         let ctx = TestContext::new(&mut app, "test.txt", "line 1\nline 2\nline 3");
 
         ctx.code_review_view.update(&mut app, |_view, view_ctx| {
-            let RelocateCommentsResult {
-                comments: relocated,
-                fallback_count: fallbacks,
-            } = CodeReviewView::relocate_comments(vec![], &ctx.state, &ctx.repo_location, view_ctx);
+            let relocated =
+                CodeReviewView::relocate_comments(vec![], &ctx.state, &ctx.repo_location, view_ctx);
 
             assert!(
                 relocated.is_empty(),
                 "Empty input should return empty output"
             );
-            assert_eq!(fallbacks, 0, "Empty input should have no fallbacks");
         });
     });
 }
@@ -412,10 +316,7 @@ fn test_relocate_comments_general_comment_passes_through() {
         let original_id = general_comment.id;
 
         ctx.code_review_view.update(&mut app, |_view, view_ctx| {
-            let RelocateCommentsResult {
-                comments: relocated,
-                fallback_count: fallbacks,
-            } = CodeReviewView::relocate_comments(
+            let relocated = CodeReviewView::relocate_comments(
                 vec![general_comment],
                 &ctx.state,
                 &ctx.repo_location,
@@ -427,10 +328,6 @@ fn test_relocate_comments_general_comment_passes_through() {
             assert!(
                 matches!(relocated[0].target, AttachedReviewCommentTarget::General),
                 "General comment should remain General"
-            );
-            assert_eq!(
-                fallbacks, 0,
-                "General comments should not count as fallbacks"
             );
         });
     });
@@ -447,10 +344,7 @@ fn test_relocate_comments_file_comment_passes_through() {
         let original_id = file_comment.id;
 
         ctx.code_review_view.update(&mut app, |_view, view_ctx| {
-            let RelocateCommentsResult {
-                comments: relocated,
-                fallback_count: fallbacks,
-            } = CodeReviewView::relocate_comments(
+            let relocated = CodeReviewView::relocate_comments(
                 vec![file_comment],
                 &ctx.state,
                 &ctx.repo_location,
@@ -466,7 +360,6 @@ fn test_relocate_comments_file_comment_passes_through() {
                 ),
                 "File comment should remain File"
             );
-            assert_eq!(fallbacks, 0, "File comments should not count as fallbacks");
         });
     });
 }
@@ -482,10 +375,7 @@ fn test_relocate_comments_line_comment_no_matching_editor_marked_outdated() {
         let original_id = line_comment.id;
 
         ctx.code_review_view.update(&mut app, |_view, view_ctx| {
-            let RelocateCommentsResult {
-                comments: relocated,
-                fallback_count: fallbacks,
-            } = CodeReviewView::relocate_comments(
+            let relocated = CodeReviewView::relocate_comments(
                 vec![line_comment],
                 &ctx.state,
                 &ctx.repo_location,
@@ -501,10 +391,6 @@ fn test_relocate_comments_line_comment_no_matching_editor_marked_outdated() {
             assert!(
                 relocated[0].outdated,
                 "Comment should be marked as outdated"
-            );
-            assert_eq!(
-                fallbacks, 0,
-                "Outdated comments should not count as fallbacks"
             );
         });
     });
@@ -526,10 +412,7 @@ fn test_relocate_comments_multiple_comment_types() {
 
         ctx.code_review_view.update(&mut app, |_view, view_ctx| {
             let comments = vec![general_comment, file_comment, line_comment];
-            let RelocateCommentsResult {
-                comments: relocated,
-                fallback_count: _,
-            } = CodeReviewView::relocate_comments(
+            let relocated = CodeReviewView::relocate_comments(
                 comments,
                 &ctx.state,
                 &ctx.repo_location,
@@ -573,10 +456,7 @@ fn test_relocate_comments_line_comment_with_absolute_path() {
         let original_id = line_comment.id;
 
         ctx.code_review_view.update(&mut app, |_view, view_ctx| {
-            let RelocateCommentsResult {
-                comments: relocated,
-                fallback_count: _,
-            } = CodeReviewView::relocate_comments(
+            let relocated = CodeReviewView::relocate_comments(
                 vec![line_comment],
                 &ctx.state,
                 &ctx.repo_location,
@@ -601,140 +481,6 @@ fn test_relocate_comments_line_comment_with_absolute_path() {
 }
 
 #[test]
-fn test_attach_pending_imported_comment_formats_body_and_uses_absolute_path() {
-    let repo_path = PathBuf::from("/repo");
-
-    let pending = make_pending_comment(
-        "1",
-        "alice",
-        "Hello world",
-        None,
-        "2024-01-01T00:00:00Z",
-        PendingImportedReviewCommentTarget::Line {
-            relative_file_path: PathBuf::from("test.txt"),
-            line: EditorLineLocation::Current {
-                line_number: LineCount::from(1),
-                line_range: LineCount::from(1)..LineCount::from(2),
-            },
-            diff_content: LineDiffContent {
-                content: "+line 1".to_string(),
-                lines_added: LineCount::from(1),
-                lines_removed: LineCount::from(0),
-            },
-        },
-    );
-
-    let repo_location = LocalOrRemotePath::Local(repo_path.clone());
-    let attached = attach_pending_imported_comments(vec![pending], &repo_location);
-
-    assert_eq!(attached.len(), 1);
-    assert_eq!(attached[0].content, "**@alice**:\nHello world");
-
-    match &attached[0].target {
-        AttachedReviewCommentTarget::Line {
-            absolute_file_path, ..
-        } => {
-            assert_eq!(
-                *absolute_file_path,
-                LocalOrRemotePath::Local(repo_path.join("test.txt")),
-            );
-        }
-        _ => panic!("expected line comment target"),
-    }
-
-    match &attached[0].origin {
-        CommentOrigin::ImportedFromGitHub(details) => {
-            assert_eq!(details.author, "alice");
-            assert_eq!(details.github_comment_id, "1");
-            assert!(details.github_parent_id.is_none());
-        }
-        _ => panic!("expected imported origin"),
-    }
-}
-
-#[test]
-fn test_attach_pending_imported_thread_flattens_depth_first_sorted_by_timestamp() {
-    let repo_path = PathBuf::from("/repo");
-
-    let root = make_pending_comment(
-        "1",
-        "alice",
-        "Root",
-        None,
-        "2024-01-01T00:00:00Z",
-        PendingImportedReviewCommentTarget::Line {
-            relative_file_path: PathBuf::from("test.txt"),
-            line: EditorLineLocation::Current {
-                line_number: LineCount::from(1),
-                line_range: LineCount::from(1)..LineCount::from(2),
-            },
-            diff_content: LineDiffContent {
-                content: "+line 1".to_string(),
-                lines_added: LineCount::from(1),
-                lines_removed: LineCount::from(0),
-            },
-        },
-    );
-
-    // Earlier reply to the root.
-    let reply_early = make_pending_comment(
-        "4",
-        "dana",
-        "Reply early",
-        Some("1"),
-        "2024-01-01T00:30:00Z",
-        PendingImportedReviewCommentTarget::General,
-    );
-
-    // Later reply to the root.
-    let reply_late = make_pending_comment(
-        "2",
-        "bob",
-        "Reply later",
-        Some("1"),
-        "2024-01-01T01:00:00Z",
-        PendingImportedReviewCommentTarget::General,
-    );
-
-    // Reply to the later reply.
-    let reply_nested = make_pending_comment(
-        "3",
-        "charlie",
-        "Nested reply",
-        Some("2"),
-        "2024-01-01T02:00:00Z",
-        PendingImportedReviewCommentTarget::General,
-    );
-
-    let latest_timestamp = reply_nested.last_update_time;
-
-    let repo_location = LocalOrRemotePath::Local(repo_path.clone());
-    let attached = attach_pending_imported_comments(
-        vec![reply_late, root, reply_nested, reply_early],
-        &repo_location,
-    );
-
-    assert_eq!(attached.len(), 1);
-    assert_eq!(
-        attached[0].content,
-        "**@alice**:\nRoot\n---\n**@dana**:\nReply early\n---\n**@bob**:\nReply later\n---\n**@charlie**:\nNested reply"
-    );
-    assert_eq!(attached[0].last_update_time, latest_timestamp);
-
-    match &attached[0].target {
-        AttachedReviewCommentTarget::Line {
-            absolute_file_path, ..
-        } => {
-            assert_eq!(
-                *absolute_file_path,
-                LocalOrRemotePath::Local(repo_path.join("test.txt")),
-            );
-        }
-        _ => panic!("expected root line target to be preserved"),
-    }
-}
-
-#[test]
 fn test_relocate_comments_file_comment_no_matching_editor_marked_outdated() {
     App::test((), |mut app| async move {
         // Editor is for "test.txt" but comment is for "other.txt"
@@ -744,10 +490,7 @@ fn test_relocate_comments_file_comment_no_matching_editor_marked_outdated() {
         let original_id = file_comment.id;
 
         ctx.code_review_view.update(&mut app, |_view, view_ctx| {
-            let RelocateCommentsResult {
-                comments: relocated,
-                fallback_count: fallbacks,
-            } = CodeReviewView::relocate_comments(
+            let relocated = CodeReviewView::relocate_comments(
                 vec![file_comment],
                 &ctx.state,
                 &ctx.repo_location,
@@ -763,10 +506,6 @@ fn test_relocate_comments_file_comment_no_matching_editor_marked_outdated() {
             assert!(
                 relocated[0].outdated,
                 "Comment should be marked as outdated"
-            );
-            assert_eq!(
-                fallbacks, 0,
-                "Outdated file comments should not count as fallbacks"
             );
         });
     });
@@ -785,10 +524,7 @@ fn test_relocate_comments_line_removed_marked_outdated() {
         let original_id = line_comment.id;
 
         ctx.code_review_view.update(&mut app, |_view, view_ctx| {
-            let RelocateCommentsResult {
-                comments: relocated,
-                fallback_count: fallbacks,
-            } = CodeReviewView::relocate_comments(
+            let relocated = CodeReviewView::relocate_comments(
                 vec![line_comment],
                 &ctx.state,
                 &ctx.repo_location,
@@ -804,95 +540,6 @@ fn test_relocate_comments_line_removed_marked_outdated() {
             assert!(
                 relocated[0].outdated,
                 "Comment should be marked as outdated when line content cannot be found"
-            );
-            assert_eq!(
-                fallbacks, 1,
-                "Should count as a fallback when line content cannot be matched"
-            );
-        });
-    });
-}
-
-/// Regression test for the reported bug: an imported GitHub PR comment placed on
-/// a **context** (unchanged) diff line must NOT be marked `outdated` when the
-/// line still exists verbatim in the editor.
-///
-/// Imported context diff lines are stored with the unified-diff leading-space
-/// marker (`" line 2"`). Before the fix, `original_text()` (which strips only
-/// `+`/`-`) was used for matching, so `" line 2"` never matched the editor's
-/// `"line 2"` and the comment fell back to outdated. The fix routes imported
-/// comments through `imported_original_text()`, which also strips the space.
-#[test]
-fn test_imported_context_line_comment_relocates_and_not_outdated() {
-    App::test((), |mut app| async move {
-        let ctx = TestContext::new(&mut app, "test.txt", "line 1\nline 2\nline 3");
-
-        // Imported comment on line 2 as a CONTEXT line (leading-space marker).
-        let comment = create_imported_line_comment(
-            "/repo/test.txt",
-            1,
-            " line 2",
-            "Comment on an unchanged (context) line",
-        );
-
-        ctx.code_review_view.update(&mut app, |_view, view_ctx| {
-            let RelocateCommentsResult {
-                comments: relocated,
-                fallback_count: fallbacks,
-            } = CodeReviewView::relocate_comments(
-                vec![comment],
-                &ctx.state,
-                &ctx.repo_location,
-                view_ctx,
-            );
-
-            assert_eq!(relocated.len(), 1, "Comment should be relocated");
-            assert!(
-                !relocated[0].outdated,
-                "Imported context-line comment should NOT be outdated when the line still exists"
-            );
-            assert_eq!(
-                fallbacks, 0,
-                "Should have no fallbacks when content matches"
-            );
-        });
-    });
-}
-
-/// An imported context-line comment whose line genuinely no longer exists must
-/// still fall back to `outdated` — the fix must not defeat real outdated detection.
-#[test]
-fn test_imported_context_line_comment_removed_marked_outdated() {
-    App::test((), |mut app| async move {
-        let ctx = TestContext::new(&mut app, "test.txt", "line 1\nline 3");
-
-        // Imported context comment on a line (" old line 2") that no longer exists.
-        let comment = create_imported_line_comment(
-            "/repo/test.txt",
-            1,
-            " old line 2",
-            "Comment on a since-removed context line",
-        );
-
-        ctx.code_review_view.update(&mut app, |_view, view_ctx| {
-            let RelocateCommentsResult {
-                comments: relocated,
-                fallback_count: fallbacks,
-            } = CodeReviewView::relocate_comments(
-                vec![comment],
-                &ctx.state,
-                &ctx.repo_location,
-                view_ctx,
-            );
-
-            assert_eq!(relocated.len(), 1, "Comment should be kept");
-            assert!(
-                relocated[0].outdated,
-                "Imported comment should be outdated when its line no longer exists"
-            );
-            assert_eq!(
-                fallbacks, 1,
-                "Should count as a fallback when content is gone"
             );
         });
     });
@@ -927,14 +574,10 @@ fn test_native_indented_context_comment_not_outdated() {
             base: None,
             head: None,
             outdated: false,
-            origin: CommentOrigin::Native,
         };
 
         ctx.code_review_view.update(&mut app, |_view, view_ctx| {
-            let RelocateCommentsResult {
-                comments: relocated,
-                fallback_count: fallbacks,
-            } = CodeReviewView::relocate_comments(
+            let relocated = CodeReviewView::relocate_comments(
                 vec![comment],
                 &ctx.state,
                 &ctx.repo_location,
@@ -946,7 +589,6 @@ fn test_native_indented_context_comment_not_outdated() {
                 !relocated[0].outdated,
                 "Native indented-line comment should NOT be outdated (leading whitespace is significant)"
             );
-            assert_eq!(fallbacks, 0, "Should have no fallbacks for native indented match");
         });
     });
 }
@@ -1132,10 +774,7 @@ fn test_active_comments_not_marked_outdated() {
         let original_id = line_comment.id;
 
         ctx.code_review_view.update(&mut app, |_view, view_ctx| {
-            let RelocateCommentsResult {
-                comments: relocated,
-                fallback_count: fallbacks,
-            } = CodeReviewView::relocate_comments(
+            let relocated = CodeReviewView::relocate_comments(
                 vec![line_comment],
                 &ctx.state,
                 &ctx.repo_location,
@@ -1147,10 +786,6 @@ fn test_active_comments_not_marked_outdated() {
             assert!(
                 !relocated[0].outdated,
                 "Comment should NOT be marked as outdated when line content is found"
-            );
-            assert_eq!(
-                fallbacks, 0,
-                "Should have no fallbacks when content matches"
             );
         });
     });

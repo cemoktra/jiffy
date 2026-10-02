@@ -190,6 +190,7 @@ fn test_format_git_branch_command_changes_to_linked_worktree_path() {
         branch_name: "feature-a".to_string(),
         worktree_path: Some("/tmp/repo feature-a".to_string()),
         is_linked_worktree: true,
+        is_jj_bookmark: false,
     }
     .encode();
 
@@ -207,13 +208,14 @@ fn test_format_git_branch_command_reports_missing_linked_worktree_path() {
         branch_name: "feature-a".to_string(),
         worktree_path: None,
         is_linked_worktree: true,
+        is_jj_bookmark: false,
     }
     .encode();
 
     assert_eq!(
         GitBranch(value).prompt_chip_command(),
         PromptChipShellCommand::Echo {
-            message: "The branch is already checked out in another worktree, but Warp couldn't find its path."
+            message: "The branch is already checked out in another worktree, but Jiffy couldn't find its path."
         }
     );
 }
@@ -231,6 +233,7 @@ fn test_git_branch_menu_icon_uses_worktree_icon_for_linked_worktree() {
         branch_name: "feature-a".to_string(),
         worktree_path: Some("/tmp/repo-feature-a".to_string()),
         is_linked_worktree: true,
+        is_jj_bookmark: false,
     }
     .encode();
 

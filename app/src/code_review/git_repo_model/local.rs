@@ -21,6 +21,7 @@ use crate::util::git::{detect_current_branch_display, detect_main_branch};
 /// automatically torn down.
 pub struct LocalGitRepoStatusModel {
     repo_path: PathBuf,
+    is_jj: bool,
     repository: ModelHandle<Repository>,
     subscriber_id: Option<SubscriberId>,
     metadata: Option<GitStatusMetadata>,
@@ -39,16 +40,37 @@ impl LocalGitRepoStatusModel {
         repository_model: ModelHandle<Repository>,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
+        let is_jj = repository_model.as_ref(ctx).is_jj();
         let mut model = Self {
             repo_path: repo_path.clone(),
+            is_jj,
             repository: repository_model.clone(),
             subscriber_id: None,
             metadata: None,
             computing_metadata_abort_handle: None,
         };
 
-        // Kick off initial metadata computation.
-        model.refresh_metadata(ctx);
+        // Kick off initial metadata computation. jj must be resolved from the user's shell `PATH`
+        // first, since GUI launches often can't see it.
+        #[cfg(feature = "local_tty")]
+        let resolve_jj = is_jj && !warp_util::jj::is_jj_executable_resolved();
+        #[cfg(not(feature = "local_tty"))]
+        let resolve_jj = false;
+        if resolve_jj {
+            #[cfg(feature = "local_tty")]
+            {
+                let jj_future =
+                    crate::terminal::local_shell::resolve_executable_from_user_shell("jj", ctx);
+                ctx.spawn(jj_future, |me, jj_path, ctx| {
+                    if let Some(jj_path) = jj_path {
+                        warp_util::jj::set_jj_executable(jj_path);
+                    }
+                    me.refresh_metadata(ctx);
+                });
+            }
+        } else {
+            model.refresh_metadata(ctx);
+        }
 
         // Start watching for filesystem changes.
         let (repository_update_tx, repository_update_rx) = async_channel::unbounded();
@@ -108,11 +130,6 @@ impl LocalGitRepoStatusModel {
         self.metadata.as_ref()
     }
 
-    /// The path to the repository root.
-    pub fn repo_path(&self) -> &Path {
-        &self.repo_path
-    }
-
     /// Manually trigger a metadata refresh.  Called by the terminal view after
     /// events that may have changed git state (block completed, agent file
     /// edits, etc.).
@@ -121,8 +138,15 @@ impl LocalGitRepoStatusModel {
             handle.abort();
         }
         let repo_path_buf = self.repo_path.clone();
+        let is_jj = self.is_jj;
         self.computing_metadata_abort_handle = Some(ctx.spawn(
-            async move { Self::load_metadata(repo_path_buf).await },
+            async move {
+                if is_jj {
+                    super::jj::load_metadata(&repo_path_buf).await
+                } else {
+                    Self::load_metadata(repo_path_buf).await
+                }
+            },
             |me, result, ctx| {
                 me.handle_metadata_result(result, ctx);
             },
@@ -250,6 +274,7 @@ impl LocalGitRepoStatusModel {
             Self::branch_tracking_status(&repo_path, &current_branch_name).await;
 
         Ok(GitStatusMetadata {
+            prompt_label: current_branch_name.clone(),
             current_branch_name,
             main_branch_name,
             stats_against_head: stats_against_head.aggregate_stats,
@@ -266,6 +291,7 @@ impl LocalGitRepoStatusModel {
     ) -> Self {
         Self {
             repo_path: PathBuf::from("/test"),
+            is_jj: false,
             repository,
             subscriber_id: None,
             metadata,

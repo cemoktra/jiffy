@@ -20,7 +20,6 @@ use super::session_settings::SessionSettings;
 use super::settings::TerminalSettings;
 use super::shell::ShellType;
 use super::{SizeInfo, TerminalModel, prompt, should_right_click_paste};
-use crate::ai::blocklist::BlocklistAIInputModel;
 use crate::appearance::Appearance;
 use crate::context_chips::display::PromptDisplay;
 use crate::context_chips::spacing;
@@ -78,42 +77,22 @@ pub fn should_render_prompt_on_same_line(
     terminal_model: &TerminalModel,
     app: &AppContext,
 ) -> bool {
-    // We render the prompt on the same line, in the input editor, if:
-    // 1. The user is using a custom prompt (PS1)
-    // 2. The user has the same line prompt setting enabled for their Warp prompt.
-
-    // If universal developer input is enabled, ignore PS1 rendering logic
+    // We render the prompt on the same line, in the input editor, only for a custom prompt (PS1).
     if is_universal_developer_input {
         return false;
     }
 
-    let should_render_ps1 = should_render_ps1_prompt(terminal_model, app);
-
-    if FeatureFlag::AgentView.is_enabled() {
-        should_render_ps1
-    } else {
-        let session_settings = SessionSettings::as_ref(app);
-        should_render_ps1
-            || session_settings
-                .saved_prompt
-                .value()
-                .same_line_prompt_enabled()
-    }
+    should_render_ps1_prompt(terminal_model, app)
 }
 
-/// Returns `true` if the shell or AI prompt should be rendered using the editors
+/// Returns `true` if the shell prompt should be rendered using the editors
 /// `EditorDecoratorElements` API.
-///
-/// The AI prompt is unconditionally rendered above the input.
 pub fn should_render_prompt_using_editor_decorator_elements(
     is_universal_developer_input: bool,
-    ai_input_model: &ModelHandle<BlocklistAIInputModel>,
     model: &TerminalModel,
     app: &AppContext,
 ) -> bool {
     should_render_prompt_on_same_line(is_universal_developer_input, model, app)
-        && (!ai_input_model.as_ref(app).is_ai_input_enabled()
-            || FeatureFlag::AgentView.is_enabled())
 }
 
 pub(in crate::terminal) struct PromptAndPadding {
@@ -173,8 +152,6 @@ pub struct PromptRenderHelper {
     prompt_view: ViewHandle<PromptDisplay>,
     prompt_selection_state_handle: SelectionHandle,
     input_render_state_model_handle: ModelHandle<InputRenderStateModel>,
-
-    ai_input_model: ModelHandle<BlocklistAIInputModel>,
 }
 
 #[derive(Clone, Copy)]
@@ -199,7 +176,6 @@ impl PromptRenderHelper {
         prompt_selection_state_handle: SelectionHandle,
         parent_view_id: EntityId,
         input_render_state_model_handle: ModelHandle<InputRenderStateModel>,
-        ai_input_model: ModelHandle<BlocklistAIInputModel>,
     ) -> Self {
         Self {
             sessions,
@@ -207,7 +183,6 @@ impl PromptRenderHelper {
             prompt_selection_state_handle,
             prompt_parent_view_id: parent_view_id,
             input_render_state_model_handle,
-            ai_input_model,
         }
     }
 
@@ -241,32 +216,6 @@ impl PromptRenderHelper {
     }
 
     fn bootstrapping_shell_message(&self, model: &TerminalModel, sessions: &Sessions) -> String {
-        use crate::terminal::event::RemoteServerSetupState;
-
-        // If a remote server setup is in progress for the pending session,
-        // show a stage-specific message instead of the generic "Starting shell...".
-        if let Some(pending_session_id) = model.pending_session_id()
-            && let Some(state) = sessions.remote_server_setup_state(pending_session_id)
-        {
-            return match state {
-                RemoteServerSetupState::Checking => "Starting shell...".to_string(),
-                RemoteServerSetupState::Installing {
-                    progress_percent: Some(p),
-                } => format!("Installing Warp SSH Extension... ({p}%)"),
-                RemoteServerSetupState::Installing {
-                    progress_percent: None,
-                } => "Installing Warp SSH Extension...".to_string(),
-                RemoteServerSetupState::Updating => "Updating Warp SSH Extension...".to_string(),
-                RemoteServerSetupState::Initializing => "Initializing...".to_string(),
-                RemoteServerSetupState::Ready => "Starting shell...".to_string(),
-                // Failed and Unsupported both fall back to the wrapper-only SSH
-                // flow, so we render the same generic prompt as a normal
-                // SSH session that doesn't have the remote-server extension.
-                RemoteServerSetupState::Failed { .. }
-                | RemoteServerSetupState::Unsupported { .. } => "Starting shell...".to_string(),
-            };
-        }
-
         if !sessions.is_empty() {
             "Starting shell...".to_string()
         } else {
@@ -408,16 +357,13 @@ impl PromptRenderHelper {
             InputSettings::as_ref(app).is_universal_developer_input_enabled(app);
         let render_prompt_on_same_line =
             should_render_prompt_on_same_line(is_universal_input, model, app);
-        let padding_right = if should_render_prompt_using_editor_decorator_elements(
-            is_universal_input,
-            &self.ai_input_model,
-            model,
-            app,
-        ) {
-            LPROMPT_RIGHT_PADDING_SAME_LINE_PROMPT
-        } else {
-            *TERMINAL_VIEW_PADDING_LEFT
-        };
+        let padding_right =
+            if should_render_prompt_using_editor_decorator_elements(is_universal_input, model, app)
+            {
+                LPROMPT_RIGHT_PADDING_SAME_LINE_PROMPT
+            } else {
+                *TERMINAL_VIEW_PADDING_LEFT
+            };
         // If the active block hasn't received the precmd message, we're waiting for the next
         // prompt. However, we don't want the UI to flicker so we show the previous prompt
         // until the user changes the editor.
@@ -593,7 +539,6 @@ impl PromptRenderHelper {
         let should_render_prompt_using_editor_decorator_elements =
             should_render_prompt_using_editor_decorator_elements(
                 is_universal_input,
-                &self.ai_input_model,
                 terminal_model,
                 app,
             );

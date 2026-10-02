@@ -11,15 +11,9 @@ use warp_core::command::ExitCode;
 use warpui::{App, ModelHandle};
 
 use super::{HistoryEntry, HistoryEvent, PersistedCommand, ShellHost};
-use crate::ai::agent::conversation::AIConversationId;
 use crate::terminal::History;
-use crate::terminal::model::block::{
-    AgentInteractionMetadata, SerializedAIMetadata, SerializedBlock,
-};
-use crate::terminal::model::bootstrap::BootstrapStage;
 use crate::terminal::model::session::command_executor::testing::TestCommandExecutor;
 use crate::terminal::model::session::{BootstrapSessionType, Session, SessionId, SessionInfo};
-use crate::terminal::model::test_utils::TestBlockBuilder;
 use crate::terminal::shell::ShellType;
 use crate::test_util::{Stub, VirtualFS};
 
@@ -67,14 +61,11 @@ impl HistoryEntry {
             session_id: Some(session_id),
             exit_code: Some(ExitCode::from(0)),
             command: command.into(),
-            workflow_id: None,
-            workflow_command: None,
             pwd: None,
             start_ts: None,
             completed_ts: None,
             git_head: None,
             shell_host: None,
-            is_agent_executed: false,
             is_for_restored_block: false,
         }
     }
@@ -88,87 +79,14 @@ impl HistoryEntry {
             session_id: None,
             exit_code: Some(exit_code.into()),
             command: command.into(),
-            workflow_id: None,
-            workflow_command: None,
             pwd: Some(pwd.into()),
             start_ts: None,
             completed_ts: None,
             git_head: None,
             shell_host: None,
-            is_agent_executed: false,
             is_for_restored_block: false,
         }
     }
-}
-
-#[test]
-fn history_entry_for_restored_block_preserves_agent_execution() {
-    let mut block = TestBlockBuilder::new()
-        .with_bootstrap_stage(BootstrapStage::RestoreBlocks)
-        .build();
-    block.set_agent_interaction_mode_for_requested_command(
-        String::from("action-id").into(),
-        None,
-        AIConversationId::new(),
-    );
-
-    let entry = HistoryEntry::for_restored_block("ls".to_string(), &block);
-
-    assert!(entry.is_agent_executed);
-}
-
-#[test]
-fn history_entry_for_restored_block_does_not_treat_all_agent_interactions_as_agent_execution() {
-    let mut block = TestBlockBuilder::new()
-        .with_bootstrap_stage(BootstrapStage::RestoreBlocks)
-        .build();
-    block.set_agent_interaction_mode(AgentInteractionMetadata::new(
-        None,
-        AIConversationId::new(),
-        None,
-        None,
-        false,
-        false,
-    ));
-
-    let entry = HistoryEntry::for_restored_block("ls".to_string(), &block);
-
-    assert!(!entry.is_agent_executed);
-}
-
-#[test]
-fn history_entry_for_completed_block_preserves_agent_execution() {
-    let ai_metadata = serde_json::to_string(&SerializedAIMetadata::from(
-        AgentInteractionMetadata::new_hidden(
-            String::from("action-id").into(),
-            AIConversationId::new(),
-        ),
-    ))
-    .unwrap();
-    let block = SerializedBlock {
-        ai_metadata: Some(ai_metadata),
-        ..SerializedBlock::new_for_test("ls".as_bytes().to_vec(), vec![])
-    };
-
-    let entry = HistoryEntry::for_completed_block("ls".to_string(), &block);
-
-    assert!(entry.is_agent_executed);
-}
-
-#[test]
-fn history_entry_for_completed_block_does_not_treat_all_agent_interactions_as_agent_execution() {
-    let ai_metadata = serde_json::to_string(&SerializedAIMetadata::from(
-        AgentInteractionMetadata::new(None, AIConversationId::new(), None, None, false, false),
-    ))
-    .unwrap();
-    let block = SerializedBlock {
-        ai_metadata: Some(ai_metadata),
-        ..SerializedBlock::new_for_test("ls".as_bytes().to_vec(), vec![])
-    };
-
-    let entry = HistoryEntry::for_completed_block("ls".to_string(), &block);
-
-    assert!(!entry.is_agent_executed);
 }
 
 /// Initializes history for testing
@@ -771,9 +689,6 @@ fn append_command_with_rich_history_data() {
                 shell_host: Some(shell_host.clone()),
                 session_id: None,
                 git_branch: None,
-                workflow_id: None,
-                workflow_command: None,
-                is_agent_executed: false,
             },
             PersistedCommand {
                 id: 0,
@@ -785,9 +700,6 @@ fn append_command_with_rich_history_data() {
                 shell_host: Some(shell_host.clone()),
                 session_id: None,
                 git_branch: Some(String::from("foobar")),
-                workflow_id: None,
-                workflow_command: None,
-                is_agent_executed: false,
             },
         ];
 
@@ -817,12 +729,9 @@ fn append_command_with_rich_history_data() {
                         pwd: Some(String::from("/Users/andy/")),
                         start_ts: Some(start_ts_3),
                         completed_ts: Some(end_ts_3),
-                        workflow_id: None,
-                        workflow_command: None,
                         exit_code: Some(ExitCode::from(0)),
                         git_head: None,
                         shell_host: None,
-                        is_agent_executed: false,
                         is_for_restored_block: false,
                     },
                     HistoryEntry {
@@ -831,12 +740,9 @@ fn append_command_with_rich_history_data() {
                         pwd: Some(String::from("/Users/andy/")),
                         start_ts: Some(start_ts_4),
                         completed_ts: Some(end_ts_4),
-                        workflow_id: None,
-                        workflow_command: None,
                         exit_code: Some(ExitCode::from(0)),
                         git_head: None,
                         shell_host: None,
-                        is_agent_executed: false,
                         is_for_restored_block: false,
                     },
                 ],
@@ -854,12 +760,9 @@ fn append_command_with_rich_history_data() {
                         pwd: Some(String::from("/usr/bin")),
                         start_ts: Some(start_ts_2),
                         completed_ts: Some(end_ts_2),
-                        workflow_id: None,
-                        workflow_command: None,
                         exit_code: Some(ExitCode::from(0)),
                         git_head: Some(String::from("foobar")),
                         shell_host: Some(shell_host.clone()),
-                        is_agent_executed: false,
                         is_for_restored_block: false,
                     },
                     &HistoryEntry {
@@ -868,12 +771,9 @@ fn append_command_with_rich_history_data() {
                         pwd: Some(String::from("/Users/andy/")),
                         start_ts: Some(start_ts_3),
                         completed_ts: Some(end_ts_3),
-                        workflow_id: None,
-                        workflow_command: None,
                         exit_code: Some(ExitCode::from(0)),
                         git_head: None,
                         shell_host: None,
-                        is_agent_executed: false,
                         is_for_restored_block: false,
                     },
                     &HistoryEntry {
@@ -882,12 +782,9 @@ fn append_command_with_rich_history_data() {
                         pwd: Some(String::from("/Users/andy/")),
                         start_ts: Some(start_ts_4),
                         completed_ts: Some(end_ts_4),
-                        workflow_id: None,
-                        workflow_command: None,
                         exit_code: Some(ExitCode::from(0)),
                         git_head: None,
                         shell_host: None,
-                        is_agent_executed: false,
                         is_for_restored_block: false,
                     },
                 ]
@@ -921,9 +818,6 @@ fn append_restored_command_doesnt_overwrite_rich_history() {
             shell_host: Some(shell_host),
             session_id: None,
             git_branch: None,
-            workflow_id: None,
-            workflow_command: None,
-            is_agent_executed: false,
         }];
         let mut history_handle = app.add_model(|_| History::new(persisted_commands));
         initialize_history_for_testing(
@@ -944,12 +838,9 @@ fn append_restored_command_doesnt_overwrite_rich_history() {
                     pwd: Some("/tmp".to_string()),
                     start_ts: Some(start_ts),
                     completed_ts: Some(end_ts),
-                    workflow_id: None,
-                    workflow_command: None,
                     exit_code: Some(ExitCode::from(0)),
                     git_head: None,
                     shell_host: None,
-                    is_agent_executed: false,
                     is_for_restored_block: true,
                 }],
             );
@@ -966,12 +857,9 @@ fn append_restored_command_doesnt_overwrite_rich_history() {
                         pwd: Some(String::from("/tmp")),
                         start_ts: Some(start_ts),
                         completed_ts: Some(end_ts),
-                        workflow_id: None,
-                        workflow_command: None,
                         exit_code: Some(ExitCode::from(0)),
                         git_head: None,
                         shell_host: None,
-                        is_agent_executed: false,
                         is_for_restored_block: true,
                     },
                 ]

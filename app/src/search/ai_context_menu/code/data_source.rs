@@ -7,7 +7,7 @@ use std::path::PathBuf;
 #[cfg(not(target_family = "wasm"))]
 use std::time::Duration;
 
-use ai::index::Symbol;
+use agent_context::Symbol;
 use fuzzy_match::FuzzyMatchResult;
 #[cfg(not(target_family = "wasm"))]
 use instant::Instant;
@@ -26,7 +26,7 @@ use warpui::SingletonEntity;
 #[cfg(not(target_family = "wasm"))]
 use super::search_item::CodeSearchItem;
 #[cfg(not(target_family = "wasm"))]
-use crate::ai::outline::{OutlineStatus, RepoOutlines, RepoOutlinesEvent};
+use crate::repo_outlines::{OutlineStatus, RepoOutlines, RepoOutlinesEvent};
 #[cfg(not(target_family = "wasm"))]
 use crate::search::ai_context_menu::mixer::AIContextMenuSearchableAction;
 #[cfg(not(target_family = "wasm"))]
@@ -236,10 +236,6 @@ struct CodeSearchError;
 impl DataSourceRunError for CodeSearchError {
     fn user_facing_error(&self) -> String {
         "Code search failed".to_string()
-    }
-
-    fn telemetry_payload(&self) -> serde_json::Value {
-        serde_json::json!({ "error": "model_dropped" })
     }
 
     fn as_any(&self) -> &dyn std::any::Any {

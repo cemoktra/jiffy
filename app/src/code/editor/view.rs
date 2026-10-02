@@ -5,7 +5,6 @@ use std::fmt::Debug;
 use std::ops::Range;
 use std::path::Path;
 
-use ai::diff_validation::DiffDelta;
 use lazy_static::lazy_static;
 use num_traits::SaturatingSub;
 use pathfinder_geometry::vector::vec2f;
@@ -53,6 +52,7 @@ use warpui::{
 };
 
 use crate::appearance::Appearance;
+use crate::code::diff_delta::DiffDelta;
 use crate::code::editor::EditorReviewComment;
 use crate::code::editor::comment_editor::{CommentEditor, CommentEditorEvent};
 use crate::code::editor::comments::PendingComment;
@@ -67,13 +67,13 @@ use crate::code::editor::line::EditorLineLocation;
 use crate::code::editor::model::{
     CodeEditorModel, CodeEditorModelEvent, HoverableLink, LineBound, StableEditorLine,
 };
-use crate::code::editor::nav_bar::{NavBar, NavBarBehavior, NavBarEvent};
+use crate::code::editor::nav_bar::{NavBar, NavBarEvent};
 use crate::code::editor::scroll::{ScrollPosition, ScrollTrigger, ScrollWheelBehavior};
 use crate::code::{
     NoopCommentEditorProvider, NoopFindReferencesCardProvider, ShowCommentEditorProvider,
     ShowFindReferencesCardProvider,
 };
-use crate::code_review::comments::{CommentId, CommentOrigin};
+use crate::code_review::comments::CommentId;
 use crate::editor::InteractionState;
 use crate::features::FeatureFlag;
 use crate::notebooks::editor::rich_text_styles;
@@ -541,15 +541,6 @@ impl CodeEditorView {
         ctx.notify();
     }
 
-    pub fn changed_lines(&self, app: &AppContext) -> Vec<Range<usize>> {
-        self.model
-            .as_ref(app)
-            .diff()
-            .as_ref(app)
-            .modified_lines()
-            .collect()
-    }
-
     pub fn close_find_bar(&mut self, should_focus_editor: bool, ctx: &mut ViewContext<Self>) {
         if let Some(find_bar) = &self.find_bar {
             let should_update = find_bar.update(ctx, |find_bar, _ctx| {
@@ -758,12 +749,6 @@ impl CodeEditorView {
         self.display_options.show_nav_bar = show_nav_bar;
     }
 
-    pub fn set_nav_bar_behavior(&self, behavior: NavBarBehavior, ctx: &mut ViewContext<Self>) {
-        self.nav_bar.update(ctx, |nav_bar, _ctx| {
-            nav_bar.set_behavior(behavior);
-        });
-    }
-
     pub fn set_show_current_line_highlights(
         &self,
         show_current_line_highlights: bool,
@@ -774,16 +759,8 @@ impl CodeEditorView {
         })
     }
 
-    pub fn set_scroll_wheel_behavior(&mut self, behavior: ScrollWheelBehavior) {
-        self.display_options.scroll_wheel_behavior = behavior;
-    }
-
     pub fn set_vertical_scrollbar_appearance(&mut self, appearance: ScrollableAppearance) {
         self.display_options.vertical_scrollbar_appearance = appearance;
-    }
-
-    pub fn set_horizontal_scrollbar_appearance(&mut self, appearance: ScrollableAppearance) {
-        self.display_options.horizontal_scrollbar_appearance = appearance;
     }
 
     pub fn set_show_find_references_provider(
@@ -949,14 +926,6 @@ impl CodeEditorView {
     ) -> Self {
         self.display_options.horizontal_scrollbar_appearance = scrollbar_appearance;
         self
-    }
-
-    pub(crate) fn starting_line_number(&self) -> Option<usize> {
-        self.display_options.starting_line_number
-    }
-
-    pub(crate) fn set_starting_line_number(&mut self, starting_line_number: Option<usize>) {
-        self.display_options.starting_line_number = starting_line_number;
     }
 
     fn handle_searcher_event(&mut self, _event: &SearchEvent, ctx: &mut ViewContext<Self>) {
@@ -1316,9 +1285,6 @@ impl CodeEditorView {
                         ScrollPosition::LineAndColumn(line_col) => {
                             self.jump_to_line_column(line_col.line_num, line_col.column_num, ctx);
                         }
-                        ScrollPosition::FocusedDiffHunk => {
-                            self.navigate_current_diff_hunk(ctx);
-                        }
                         ScrollPosition::Fraction(fraction) => {
                             self.scroll_to_fraction(fraction, ctx);
                         }
@@ -1549,36 +1515,6 @@ impl CodeEditorView {
         self.model.as_ref(ctx).buffer_version(ctx)
     }
 
-    /// Append text to the end of the buffer regardless of cursor position.
-    /// This is used for streaming content where we always want to append at the end,
-    /// not at the current cursor position since the user may select text while it's streaming.
-    pub fn append_at_end(&self, text: &str, ctx: &mut ViewContext<Self>) {
-        self.model.update(ctx, |model, ctx| {
-            // Use append_at_end to insert at the end of buffer regardless of cursor position.
-            // This ensures streaming code blocks always append at the end, even when user
-            // has clicked somewhere else in the editor.
-            model.append_at_end(text, ctx);
-        });
-    }
-
-    pub fn system_append_autoscroll_vertical_only(&self, text: &str, ctx: &mut ViewContext<Self>) {
-        self.model.update(ctx, |model, ctx| {
-            model.system_insert_autoscroll_vertical_only(text, ctx);
-        });
-    }
-
-    pub fn truncate(&self, len: usize, ctx: &mut ViewContext<Self>) {
-        self.model.update(ctx, |model, ctx| {
-            model.truncate(len, ctx);
-        });
-    }
-
-    pub fn retrieve_unified_diff(&self, file_name: String, ctx: &mut ViewContext<Self>) {
-        self.model.update(ctx, |model, ctx| {
-            model.retrieve_unified_diff(file_name, ctx);
-        });
-    }
-
     /// Identifies which line (current or removed) is at the given content-space
     /// vertical offset. Delegates to [`CodeEditorModel::line_at_vertical_offset`].
     #[allow(dead_code)]
@@ -1634,33 +1570,6 @@ impl CodeEditorView {
 
     pub fn is_editable(&self, app: &AppContext) -> bool {
         self.model.as_ref(app).interaction_state() == InteractionState::Editable
-    }
-
-    pub fn navigate_next_diff_hunk(&self, ctx: &mut ViewContext<Self>) {
-        self.nav_bar.update(ctx, |nav_bar, ctx| {
-            nav_bar.navigate_down(ctx);
-        });
-    }
-
-    pub fn navigate_previous_diff_hunk(&self, ctx: &mut ViewContext<Self>) {
-        self.nav_bar.update(ctx, |nav_bar, ctx| {
-            nav_bar.navigate_up(ctx);
-        });
-    }
-
-    fn navigate_current_diff_hunk(&self, ctx: &mut ViewContext<Self>) {
-        self.nav_bar.update(ctx, |nav_bar, ctx| {
-            nav_bar.autoscroll(ctx);
-        });
-    }
-
-    pub fn set_vertical_expansion_behavior(
-        &mut self,
-        behavior: VerticalExpansionBehavior,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        self.display_options.vertical_expansion_behavior = behavior;
-        ctx.notify();
     }
 
     pub fn selected_text(&self, ctx: &AppContext) -> Option<String> {
@@ -1957,12 +1866,6 @@ impl CodeEditorView {
         result_parts.join(&delimiter)
     }
 
-    pub fn diff_hunks_changed_lines(&self, app: &AppContext) -> (usize, usize) {
-        let model = self.model.as_ref(app);
-        let diff = model.diff().as_ref(app);
-        diff.diff_status().get_diff_lines()
-    }
-
     /// If there's a single selection, returns its starting and ending line numbers.
     pub fn selected_lines(&self, app: &AppContext) -> Option<(u32, u32)> {
         // Query the buffer model directly to determine if we have a selection
@@ -2155,7 +2058,6 @@ impl CodeEditorView {
         id: &CommentId,
         location: &EditorLineLocation,
         comment_text: &str,
-        origin: &CommentOrigin,
         ctx: &mut ViewContext<Self>,
     ) {
         let comment_exists = self
@@ -2173,17 +2075,11 @@ impl CodeEditorView {
 
         self.active_comment_editor
             .update(ctx, |comment_editor, ctx| {
-                comment_editor.reopen_saved_comment(
-                    id,
-                    Some(location.clone()),
-                    comment_text,
-                    origin,
-                    ctx,
-                );
+                comment_editor.reopen_saved_comment(id, Some(location.clone()), comment_text, ctx);
             });
 
         self.model.update(ctx, |editor_model, ctx| {
-            editor_model.reopen_comment_line(id, location, comment_text, origin, ctx);
+            editor_model.reopen_comment_line(id, location, comment_text, ctx);
         });
         ctx.emit(CodeEditorEvent::CommentEditorOpened);
 

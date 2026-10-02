@@ -4,7 +4,6 @@
 
 use std::path::Path;
 
-use warp_core::send_telemetry_from_ctx;
 use warp_core::ui::appearance::Appearance;
 use warp_errors::report_error;
 use warpui::elements::{
@@ -19,10 +18,7 @@ use crate::code_review::diff_state::CommitChainMode;
 use crate::code_review::git_dialog::pr::show_pr_created_toast;
 use crate::code_review::git_dialog::{
     GitDialog, GitDialogAction, GitDialogEvent, GitDialogMode, render_branch_section,
-    render_file_changes_box, should_send_git_ops_ai_request, show_toast, user_facing_git_error,
-};
-use crate::code_review::telemetry_event::{
-    CodeReviewTelemetryEvent, GitDialogStatus, GitOperationKind,
+    render_file_changes_box, show_toast, user_facing_git_error,
 };
 use crate::editor::{
     EditorOptions, EditorView, Event as EditorEvent, InteractionState,
@@ -42,13 +38,7 @@ pub enum CommitSubAction {
 
 const EDITOR_FONT_SIZE: f32 = 12.;
 const EDITOR_MIN_HEIGHT: f32 = 72.;
-/// Placeholder shown while the open-time AI commit-message autogen is in
-/// flight.
-const GENERATING_PLACEHOLDER_TEXT: &str = "Generating commit message\u{2026}";
-/// Placeholder shown once the open-time autogen resolves — either as a
-/// nudge if the user later clears the generated draft, or as guidance when
-/// autogen failed and the editor is blank. Also used when autogen is off.
-const FALLBACK_PLACEHOLDER_TEXT: &str = "Type a commit message";
+const PLACEHOLDER_TEXT: &str = "Type a commit message";
 /// Loading-state label while the commit / chain runs. Static regardless of
 /// which chain is in flight — the success toast communicates what actually
 /// ran.
@@ -57,6 +47,8 @@ const LOADING_LABEL: &str = "Committing\u{2026}";
 pub struct CommitState {
     pub(super) intent: CommitChainMode,
     include_unstaged: bool,
+    /// jj has no staging area, so the "Include unstaged" switch is hidden.
+    is_jj: bool,
     file_changes: Vec<FileChangeEntry>,
     changes_expanded: bool,
     switch_state: SwitchStateHandle,
@@ -89,15 +81,6 @@ pub(super) fn new_state(
     } else {
         ("Commit and publish", Icon::UploadCloud)
     };
-    // If AI autogen is on, the dialog opens with "Generating\u{2026}" and a
-    // background request fills the editor when it resolves. Otherwise, we
-    // land on the manual-type prompt immediately.
-    let ai_autogen_enabled = should_send_git_ops_ai_request(ctx);
-    let initial_placeholder = if ai_autogen_enabled {
-        GENERATING_PLACEHOLDER_TEXT
-    } else {
-        FALLBACK_PLACEHOLDER_TEXT
-    };
     let message_editor = ctx.add_typed_action_view(|ctx| {
         let appearance = Appearance::as_ref(ctx);
         let options = EditorOptions {
@@ -115,7 +98,7 @@ pub(super) fn new_state(
         };
 
         let mut editor = EditorView::new(options, ctx);
-        editor.set_placeholder_text(initial_placeholder, ctx);
+        editor.set_placeholder_text(PLACEHOLDER_TEXT, ctx);
         editor
     });
 
@@ -183,9 +166,14 @@ pub(super) fn new_state(
         );
     }
 
+    #[cfg(feature = "local_fs")]
+    let is_jj = local_repo_path.is_some_and(crate::util::jj::is_jj_workspace);
+    #[cfg(not(feature = "local_fs"))]
+    let is_jj = false;
     let state = CommitState {
         intent,
         include_unstaged,
+        is_jj,
         file_changes: Vec::new(),
         changes_expanded: true,
         switch_state: SwitchStateHandle::default(),
@@ -234,67 +222,6 @@ pub(super) fn confirm_tooltip(state: &CommitState, app: &AppContext) -> Option<&
         return Some("Enter a commit message");
     }
     None
-}
-
-/// Populates the commit message editor from an AI-generated message. Shared
-/// by both backends, whose open-time autogen arrives via the
-/// `CommitMessageGenerated` model event, so both behave identically: on
-/// success, fill the editor unless the user already typed; on failure, swap
-/// to the manual-type placeholder (no toast — the empty editor tells the
-/// story and the failure isn't retryable).
-pub(super) fn apply_generated_commit_message(
-    me: &mut GitDialog,
-    result: Result<String, String>,
-    ctx: &mut ViewContext<GitDialog>,
-) {
-    let editor_handle = match me.mode() {
-        GitDialogMode::Commit(state) => state.message_editor.clone(),
-        _ => return,
-    };
-    match result {
-        Ok(generated) => {
-            let user_typed = !editor_handle.as_ref(ctx).buffer_text(ctx).trim().is_empty();
-            editor_handle.update(ctx, |editor, ctx| {
-                // Swap "Generating\u{2026}" for the manual-type prompt so it
-                // shows if the user later clears the generated draft.
-                editor.set_placeholder_text(FALLBACK_PLACEHOLDER_TEXT, ctx);
-                // User input wins — don't clobber their text.
-                if !user_typed {
-                    editor.system_reset_buffer_text(generated.trim(), ctx);
-                }
-            });
-            me.refresh_confirm_enabled(ctx);
-            ctx.notify();
-        }
-        Err(err) => {
-            log::warn!("Failed to autogenerate commit message: {err}");
-            editor_handle.update(ctx, |editor, ctx| {
-                editor.set_placeholder_text(FALLBACK_PLACEHOLDER_TEXT, ctx);
-            });
-            me.refresh_confirm_enabled(ctx);
-            ctx.notify();
-        }
-    }
-}
-
-/// Kicks off AI commit-message autogen request.
-/// The model runs the generation (local in-process, remote on the daemon) and  
-/// the result returns via `DiffStateModelEvent::CommitMessageGenerated`, applied by `apply_generated_commit_message`.
-pub(super) fn maybe_start_commit_message_autogen(me: &GitDialog, ctx: &mut ViewContext<GitDialog>) {
-    if !should_send_git_ops_ai_request(ctx) {
-        return;
-    }
-    // Generate from the same scope that will be committed (the "include
-    // unstaged" toggle), so the message describes what `run_commit` stages
-    // rather than always assuming the full working set.
-    let include_unstaged = match me.mode() {
-        GitDialogMode::Commit(state) => state.include_unstaged,
-        _ => return,
-    };
-    let branch_name = me.branch_name().to_string();
-    me.diff_state_model().update(ctx, |m, ctx| {
-        m.generate_commit_message(include_unstaged, branch_name, ctx);
-    });
 }
 
 /// Sources the commit Changes box from synced metadata (`against_head.files`).
@@ -374,9 +301,6 @@ pub(super) fn start_confirm(me: &mut GitDialog, ctx: &mut ViewContext<GitDialog>
     let include_unstaged = state.include_unstaged;
     let message_editor = state.message_editor.clone();
     let branch_name = me.branch_name().to_string();
-    // When the chain includes create-PR, AI-generate the PR title/body when the
-    // user has it enabled (ignored for commit-only / commit-and-push).
-    let autogenerate_pr_content = should_send_git_ops_ai_request(ctx);
 
     me.set_loading(LOADING_LABEL, ctx);
 
@@ -386,34 +310,17 @@ pub(super) fn start_confirm(me: &mut GitDialog, ctx: &mut ViewContext<GitDialog>
     });
 
     me.diff_state_model().update(ctx, |m, ctx| {
-        m.git_commit_chain(
-            intent,
-            message,
-            include_unstaged,
-            branch_name,
-            autogenerate_pr_content,
-            ctx,
-        );
+        m.git_commit_chain(intent, message, include_unstaged, branch_name, ctx);
     });
 }
 
-/// Shared commit-chain completion for both backends: toast + telemetry + close.
+/// Shared commit-chain completion for both backends: toast + close.
 /// `Ok(Some)` means create-PR ran; `Ok(None)` is a plain commit / commit-and-push.
 pub(super) fn finish_commit_chain(
-    me: &GitDialog,
     intent: CommitChainMode,
     result: Result<Option<PrInfo>, String>,
     ctx: &mut ViewContext<GitDialog>,
 ) {
-    let operation = match intent {
-        CommitChainMode::CommitOnly => GitOperationKind::CommitOnly,
-        CommitChainMode::CommitAndPush => GitOperationKind::CommitAndPush,
-        CommitChainMode::CommitAndCreatePr => GitOperationKind::CommitAndCreatePr,
-    };
-    let (status, error) = match &result {
-        Ok(_) => (GitDialogStatus::Succeeded, None),
-        Err(err) => (GitDialogStatus::Failed, Some(err.clone())),
-    };
     match &result {
         Ok(Some(pr)) => show_pr_created_toast(pr, ctx),
         Ok(None) => {
@@ -429,15 +336,6 @@ pub(super) fn finish_commit_chain(
             show_toast(user_facing_git_error(err), ctx);
         }
     }
-    send_telemetry_from_ctx!(
-        CodeReviewTelemetryEvent::GitDialogCompleted {
-            is_local: Some(!me.repo_location().is_remote()),
-            operation,
-            status,
-            error,
-        },
-        ctx
-    );
     ctx.emit(GitDialogEvent::Completed);
 }
 
@@ -576,13 +474,15 @@ fn render_changes_section(state: &CommitState, appearance: &Appearance) -> Box<d
         .with_child(Container::new(switch).with_margin_left(4.).finish())
         .finish();
 
-    let header_row = Flex::row()
+    let mut header_row = Flex::row()
         .with_main_axis_size(MainAxisSize::Max)
         .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
-        .with_child(changes_label)
-        .with_child(toggle_row)
-        .finish();
+        .with_child(changes_label);
+    if !state.is_jj {
+        header_row.add_child(toggle_row);
+    }
+    let header_row = header_row.finish();
 
     let changes_box = render_file_changes_box(
         &state.file_changes,

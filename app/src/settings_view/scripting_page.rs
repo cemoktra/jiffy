@@ -1,12 +1,10 @@
 //! Settings UI for local scripting and Warp control permissions.
-use std::cell::RefCell;
-use std::collections::HashMap;
 
 use settings::Setting as _;
 #[cfg(target_os = "macos")]
 use warp_core::channel::ChannelState;
 use warp_errors::report_if_error;
-use warpui::elements::{ChildView, Element, MouseStateHandle};
+use warpui::elements::{ChildView, Element};
 #[cfg(target_os = "macos")]
 use warpui::ui_components::button::ButtonVariant;
 #[cfg(target_os = "macos")]
@@ -14,13 +12,13 @@ use warpui::ui_components::components::UiComponent;
 use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
 
 use super::settings_page::{
-    LocalOnlyIconState, MatchData, PageTitle, PageType, SettingsPageMeta, SettingsPageViewHandle,
-    SettingsWidget, render_body_item,
+    MatchData, PageTitle, PageType, SettingsPageMeta, SettingsPageViewHandle, SettingsWidget,
+    render_body_item,
 };
 use super::{SettingsSection, ToggleState};
 use crate::appearance::Appearance;
 use crate::features::FeatureFlag;
-use crate::settings::{LocalControlMode, LocalControlModeSetting, LocalControlSettings};
+use crate::settings::{LocalControlMode, LocalControlSettings};
 #[cfg(target_os = "macos")]
 use crate::view_components::DismissibleToast;
 use crate::view_components::{Dropdown, DropdownItem};
@@ -36,7 +34,6 @@ pub enum ScriptingSettingsPageAction {
 
 pub struct ScriptingSettingsPageView {
     page: PageType<Self>,
-    local_only_icon_tooltip_states: RefCell<HashMap<String, MouseStateHandle>>,
     local_control_mode_dropdown: ViewHandle<Dropdown<ScriptingSettingsPageAction>>,
     #[cfg(target_os = "macos")]
     warpctrl_installing: bool,
@@ -72,7 +69,6 @@ impl ScriptingSettingsPageView {
 
         Self {
             page: PageType::new_uncategorized(widgets, Some(PageTitle::new("Scripting"))),
-            local_only_icon_tooltip_states: RefCell::new(HashMap::new()),
             local_control_mode_dropdown,
             #[cfg(target_os = "macos")]
             warpctrl_installing: false,
@@ -121,7 +117,7 @@ impl ScriptingSettingsPageView {
                     Ok(()) => {
                         let command_name = ChannelState::channel().warpctrl_command_name();
                         let message = format!(
-                            "Successfully installed the Warp Control CLI! You can now run '{command_name}' from the command line."
+                            "Successfully installed the Jiffy Control CLI! You can now run '{command_name}' from the command line."
                         );
                         ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                             toast_stack.add_ephemeral_toast(
@@ -132,7 +128,7 @@ impl ScriptingSettingsPageView {
                         });
                     }
                     Err(error) => {
-                        let message = format!("Failed to install Warp Control command: {error}");
+                        let message = format!("Failed to install Jiffy Control command: {error}");
                         log::warn!("{message}");
                         ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                             toast_stack.add_persistent_toast(
@@ -259,13 +255,12 @@ impl SettingsWidget for WarpControlCliInstallWidget {
         };
 
         render_body_item::<ScriptingSettingsPageAction>(
-            "Warp Control CLI command".into(),
+            "Jiffy Control CLI command".into(),
             None,
-            LocalOnlyIconState::Hidden,
             ToggleState::Enabled,
             appearance,
             button,
-            Some("Install the warpctrl command for scripting Warp from your terminal.".to_owned()),
+            Some("Install the warpctrl command for scripting Jiffy from your terminal.".to_owned()),
         )
     }
 }
@@ -282,21 +277,15 @@ impl SettingsWidget for LocalControlModeWidget {
         &self,
         view: &Self::View,
         appearance: &Appearance,
-        app: &AppContext,
+        _app: &AppContext,
     ) -> Box<dyn Element> {
         render_body_item::<ScriptingSettingsPageAction>(
             "warpctrl CLI".into(),
             None,
-            LocalOnlyIconState::for_setting(
-                LocalControlModeSetting::storage_key(),
-                LocalControlModeSetting::sync_to_cloud(),
-                &mut view.local_only_icon_tooltip_states.borrow_mut(),
-                app,
-            ),
             ToggleState::Enabled,
             appearance,
             ChildView::new(&view.local_control_mode_dropdown).finish(),
-            Some("warpctrl allows for scripting Warp's UI. Use with care.".to_owned()),
+            Some("warpctrl allows for scripting Jiffy's UI. Use with care.".to_owned()),
         )
     }
 }

@@ -15,29 +15,27 @@
 
 set -e
 
-# Extract channel suffix from BINARY_NAME
-if [ "$ARTIFACT" = "cli" ]; then
-  CHANNEL_SUFFIX="${BINARY_NAME#oz}"
-else
-  CHANNEL_SUFFIX="${BINARY_NAME#warp}"
-fi
-REPO_NAME="warpdotdev$CHANNEL_SUFFIX"
-
-# On Linux, we keep the `-stable` suffix for stable to avoid package conflicts.
-# The binary name is still `oz`, and the repo name is still `warpdotdev`.
-if [ "$ARTIFACT" = "cli" -a "$RELEASE_CHANNEL" = "stable" ]; then
-  CHANNEL_SUFFIX="-stable"
-fi
-
 ARTIFACT="${ARTIFACT:-app}"
-if [ "$ARTIFACT" = "app" ]; then
-  PACKAGE_NAME="warp-terminal$CHANNEL_SUFFIX"
-elif [ "$ARTIFACT" = "cli" ]; then
-  PACKAGE_NAME="oz$CHANNEL_SUFFIX"
-else
-  echo "::error ::Unknown ARTIFACT: $ARTIFACT (expected 'app' or 'cli')"
-  exit 1
-fi
+case "$ARTIFACT" in
+  app)
+    CHANNEL_SUFFIX=""
+    PACKAGE_NAME="$APP_PACKAGE_NAME"
+    OPT_DIR="$APP_OPT_DIR"
+    ;;
+  cli)
+    CHANNEL_SUFFIX="${BINARY_NAME#oz}"
+    # On Linux, we keep the `-stable` suffix for stable to avoid package conflicts.
+    if [ "$RELEASE_CHANNEL" = "stable" ]; then
+      CHANNEL_SUFFIX="-stable"
+    fi
+    PACKAGE_NAME="oz$CHANNEL_SUFFIX"
+    OPT_DIR="/opt/warpdotdev/$PACKAGE_NAME"
+    ;;
+  *)
+    echo "::error ::Unknown ARTIFACT: $ARTIFACT (expected 'app' or 'cli')"
+    exit 1
+    ;;
+esac
 
 BUILD_ARCH="${BUILD_ARCH:-$(uname -m)}"
 if [ "$BUILD_ARCH" = "aarch64" ]; then
@@ -70,13 +68,15 @@ VERSION="$GIT_RELEASE_TAG"
 RELEASE="1"
 sed \
     "s#@@CHANNEL_SUFFIX@@#$CHANNEL_SUFFIX#g; \
+     s#@@PACKAGE_NAME@@#$PACKAGE_NAME#g; \
+     s#@@OPTDIR@@#$OPT_DIR#g; \
      s#@@BINARY_NAME@@#$BINARY_NAME#g; \
      s#@@VERSION@@#$VERSION#g; \
      s#@@RELEASE@@#$RELEASE#g; \
      s#@@ARCH@@#$ARCH#g; \
      s#@@WORKSPACEROOT@@#$WORKSPACE_ROOT_DIR#g; \
      s#@@BUNDLEID@@#$BUNDLE_ID#g; \
-     s#@@REPO_NAME@@#$REPO_NAME#g; \
+     s#@@REPO_NAME@@#warpdotdev$CHANNEL_SUFFIX#g; \
      s#@@RELEASE_CHANNEL@@#$RELEASE_CHANNEL#g" \
     < "$WORKSPACE_ROOT_DIR/resources/linux/rpm/$ARTIFACT/warp.spec.template" \
     > "$RPMBUILD_DIR/SPEC/warp.spec"
@@ -87,26 +87,5 @@ fakeroot rpmbuild -v -bb "$RPMBUILD_DIR/SPEC/warp.spec" --target="$ARCH" --defin
 # Copy the package to the output directory.
 RPM_NAME="$PACKAGE_NAME-$VERSION-$RELEASE.$ARCH.rpm"
 cp "$RPMBUILD_DIR/RPMS/$ARCH/$RPM_NAME" "$OUT_DIR"
-
-# If we're running on GitHub, sign the package using our signing key that
-# should have already been added to the gpg-agent with a preset passphrase.
-if [ "${GITHUB_ACTIONS}" == "true" ]; then
-  # Import our signing key's public key into rpm so the signature can be
-  # verified.
-  sudo rpm --import https://releases.warp.dev/linux/keys/warp.asc
-
-  # We use batch mode with tty-based pin entry to ensure that the build doesn't
-  # hang waiting on user input if, for some reason, we failed to preset the
-  # passphrase for the signing key in the gpg-agent cache.
-  #
-  # Additionally, until we know that this works, don't let an error here fail
-  # the build.
-  rpmsign \
-    --verbose \
-    --addsign --key-id "linux-maintainers@warp.dev" \
-    --define "_gpg_sign_cmd_extra_args --batch --yes --pinentry-mode loopback" --define "_gpg_digest_algo sha256" \
-    "$OUT_DIR/$RPM_NAME" \
-    || true
-fi
 
 echo "Successfully built .rpm package at $OUT_DIR/$RPM_NAME!"

@@ -1,8 +1,7 @@
-use ai::skills::SkillReference;
+use agent_context::skills::SkillReference;
 use warpui::elements::ChildView;
 use warpui::{Element, Entity, EntityId, ModelHandle, View, ViewContext, ViewHandle};
 
-use crate::ai::blocklist::agent_view::AgentViewController;
 use crate::search::data_source::Query;
 use crate::search::mixer::{SearchMixer, SearchMixerEvent};
 use crate::terminal::input::buffer_model::{InputBufferModel, InputBufferUpdateEvent};
@@ -14,7 +13,6 @@ use crate::terminal::input::suggestions_mode_model::{
     InputSuggestionsModeEvent, InputSuggestionsModeModel,
 };
 use crate::terminal::model::session::active_session::ActiveSession;
-use crate::terminal::view::ambient_agent::AmbientAgentViewModel;
 
 #[derive(Debug, Clone)]
 pub enum InlineSkillSelectorEvent {
@@ -27,31 +25,21 @@ pub enum InlineSkillSelectorEvent {
 pub struct InlineSkillSelectorView {
     menu_view: ViewHandle<InlineMenuView<AcceptSkill>>,
     mixer: ModelHandle<SearchMixer<AcceptSkill>>,
-    data_source: ModelHandle<SkillSelectorDataSource>,
     suggestions_mode_model: ModelHandle<InputSuggestionsModeModel>,
     input_buffer_model: ModelHandle<InputBufferModel>,
 }
 
 impl InlineSkillSelectorView {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         suggestions_mode_model: ModelHandle<InputSuggestionsModeModel>,
-        agent_view_controller: ModelHandle<AgentViewController>,
         input_buffer_model: &ModelHandle<InputBufferModel>,
         positioner: &ModelHandle<InlineMenuPositioner>,
         active_session: ModelHandle<ActiveSession>,
         terminal_view_id: EntityId,
-        ambient_agent_view_model: Option<ModelHandle<AmbientAgentViewModel>>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
-        let data_source = ctx.add_model(|ctx| {
-            SkillSelectorDataSource::new(
-                active_session,
-                terminal_view_id,
-                ambient_agent_view_model,
-                ctx,
-            )
-        });
+        let data_source = ctx
+            .add_model(|ctx| SkillSelectorDataSource::new(active_session, terminal_view_id, ctx));
 
         let mixer = ctx.add_model(|_| {
             let mut mixer = SearchMixer::<AcceptSkill>::new();
@@ -64,7 +52,6 @@ impl InlineSkillSelectorView {
                 mixer.clone(),
                 positioner.clone(),
                 &suggestions_mode_model,
-                agent_view_controller,
                 ctx,
             )
         });
@@ -131,29 +118,9 @@ impl InlineSkillSelectorView {
         Self {
             menu_view,
             mixer,
-            data_source,
             suggestions_mode_model,
             input_buffer_model: input_buffer_model.clone(),
         }
-    }
-
-    /// Attaches an ambient agent view model after construction. Idempotent.
-    pub fn set_ambient_agent_view_model(
-        &self,
-        view_model: ModelHandle<AmbientAgentViewModel>,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        self.data_source.update(ctx, |ds, ctx| {
-            ds.set_ambient_agent_view_model(view_model, ctx);
-        });
-    }
-
-    /// Sets whether bundled skills are included in results.
-    /// Should be called before opening the menu.
-    pub fn set_include_bundled(&self, include_bundled: bool, ctx: &mut ViewContext<Self>) {
-        self.data_source.update(ctx, |ds, _| {
-            ds.set_include_bundled(include_bundled);
-        });
     }
 
     pub fn select_up(&self, ctx: &mut ViewContext<Self>) {

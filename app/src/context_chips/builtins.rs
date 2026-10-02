@@ -5,6 +5,7 @@ use warp_util::path::user_friendly_path;
 
 use super::ChipValue;
 use super::context_chip::{GeneratorContext, ShellCommand, ShellCommandGenerator};
+use crate::features::FeatureFlag;
 use crate::terminal::shell::ShellType;
 
 #[cfg(test)]
@@ -91,7 +92,7 @@ pub fn ssh_session(ctx: &GeneratorContext) -> Option<ChipValue> {
     if session.is_ssh_wrapper_session()
         || matches!(
             session.session_type(),
-            crate::terminal::model::session::SessionType::WarpifiedRemote { .. }
+            crate::terminal::model::session::SessionType::WarpifiedRemote
         )
     {
         let user = session.user();
@@ -106,17 +107,12 @@ pub fn subshell(ctx: &GeneratorContext) -> Option<ChipValue> {
     let session = ctx.active_session?;
     let subshell_info = session.subshell_info().as_ref()?;
 
-    let session_type = if let Some(env_var_collection_name) = &subshell_info.env_var_collection_name
-    {
-        env_var_collection_name.clone()
-    } else {
-        subshell_info
-            .spawning_command
-            .split_whitespace()
-            .next()
-            .unwrap_or("subshell")
-            .to_string()
-    };
+    let session_type = subshell_info
+        .spawning_command
+        .split_whitespace()
+        .next()
+        .unwrap_or("subshell")
+        .to_string();
     Some(ChipValue::Text(session_type))
 }
 
@@ -147,20 +143,42 @@ pub fn shell_other_git_branches() -> ShellCommandGenerator {
     const SH_COMMAND: &str = "git --no-optional-locks branch --no-color --sort=-committerdate; \
         printf '\\036\\n'; \
         git --no-optional-locks worktree list --porcelain";
+    // Emits the jj marker, bookmarks, a separator, then `name<TAB>root` workspace lines; see
+    // `git_branch_on_click::JJ_OUTPUT_MARKER`.
+    const JJ_COMMAND: &str = "printf '\\037jj\\n'; \
+        jj --ignore-working-copy --no-pager --color=never bookmark list \
+        -T 'if(!remote, name ++ \"\\n\")'; \
+        printf '\\036\\n'; \
+        jj --ignore-working-copy --no-pager --color=never workspace list \
+        -T 'name ++ \"\\t\" ++ root ++ \"\\n\"'";
+    const IS_JJ_REPO: &str =
+        "command -v jj >/dev/null 2>&1 && jj --ignore-working-copy root >/dev/null 2>&1";
     let pwsh_command = safe_git_powershell(
         "git --no-optional-locks branch --no-color --sort=-committerdate; \
         [char]30; \
         git --no-optional-locks worktree list --porcelain",
     );
 
+    let (sh_command, fish_command) = if FeatureFlag::JjSupport.is_enabled() {
+        (
+            format!("if {IS_JJ_REPO}; then {JJ_COMMAND}; else {SH_COMMAND}; fi"),
+            format!(
+                "if {}; {JJ_COMMAND}; else {SH_COMMAND}; end",
+                IS_JJ_REPO.replace(" && ", "; and ")
+            ),
+        )
+    } else {
+        (SH_COMMAND.to_string(), SH_COMMAND.to_string())
+    };
+
     let command = ShellCommand::shell_specific([
         (ShellType::PowerShell, pwsh_command),
-        (ShellType::Bash, SH_COMMAND.to_string()),
-        (ShellType::Zsh, SH_COMMAND.to_string()),
-        (ShellType::Fish, SH_COMMAND.to_string()),
+        (ShellType::Bash, sh_command.clone()),
+        (ShellType::Zsh, sh_command),
+        (ShellType::Fish, fish_command),
     ]);
 
-    ShellCommandGenerator::new(command, Some(vec!["git".to_owned()]))
+    ShellCommandGenerator::new(command, Some(vec!["git".to_owned(), "jj".to_owned()]))
 }
 
 pub fn shell_git_branch_status() -> ShellCommandGenerator {

@@ -1318,3 +1318,40 @@ fn build_tree_fail_fast_succeeds_within_budget() {
     ));
     assert!(result.is_ok(), "FailFast must succeed when within budget");
 }
+
+#[test]
+fn test_jj_path_filtering_only_admits_op_heads() {
+    use std::path::Path;
+
+    use super::{is_jj_internal_path, is_jj_op_heads_file, should_watch_directory_in_jj_path};
+
+    assert!(!is_jj_internal_path(Path::new("/repo/src/main.rs")));
+    assert!(is_jj_internal_path(Path::new("/repo/.jj/repo/store/extra")));
+
+    assert!(is_jj_op_heads_file(Path::new(
+        "/repo/.jj/repo/op_heads/heads/0123abcd"
+    )));
+    assert!(!is_jj_op_heads_file(Path::new(
+        "/repo/.jj/repo/op_heads/heads"
+    )));
+    assert!(!is_jj_op_heads_file(Path::new(
+        "/repo/.jj/repo/op_store/operations/0123abcd"
+    )));
+    assert!(!is_jj_op_heads_file(Path::new(
+        "/repo/.jj/working_copy/tree_state"
+    )));
+
+    assert!(should_watch_directory_in_jj_path(Path::new("/repo/.jj")));
+    assert!(should_watch_directory_in_jj_path(Path::new(
+        "/repo/.jj/repo"
+    )));
+    assert!(should_watch_directory_in_jj_path(Path::new(
+        "/repo/.jj/repo/op_heads/heads"
+    )));
+    assert!(!should_watch_directory_in_jj_path(Path::new(
+        "/repo/.jj/repo/store"
+    )));
+    assert!(!should_watch_directory_in_jj_path(Path::new(
+        "/repo/.jj/working_copy"
+    )));
+}

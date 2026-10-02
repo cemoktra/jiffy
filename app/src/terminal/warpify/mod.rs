@@ -3,11 +3,10 @@ pub mod settings;
 pub mod success_block;
 pub mod trigger_state;
 
-use channel_versions::overrides::TargetOS;
+use warp_terminal::shell::TargetOS;
 use warpui::AssetProvider;
 
 use crate::ASSETS;
-use crate::terminal::model::terminal_model::SubshellInitializationInfo;
 use crate::terminal::shell::ShellType;
 
 #[derive(Debug)]
@@ -16,11 +15,9 @@ pub enum WarpificationSource {
     Subshell,
 }
 
+/// The command that spawned a subshell.
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub enum SubshellSource {
-    Command(String),
-    EnvVarCollection(String),
-}
+pub struct SubshellSource(pub String);
 
 /// This template is for the snippet that appears in the output grid for the success block if the
 /// subshell is local.
@@ -40,18 +37,9 @@ fn get_subshell_bootstrap_success_block_path(shell_type: ShellType) -> Option<&'
 /// The exact block contents varies based on whether or not the session is local or remote, in
 /// addition to the given `shell_type`.
 pub fn subshell_bootstrap_success_block_bytes(
-    subshell_initialization_info: &SubshellInitializationInfo,
     shell_type: ShellType,
     os: TargetOS,
 ) -> (Vec<u8>, bool) {
-    let from_env_var_collection = subshell_initialization_info
-        .env_var_collection_name
-        .is_some();
-
-    if from_env_var_collection {
-        return (vec![], false);
-    }
-
     let Some(subshell_bootstrap_success_block_path) =
         get_subshell_bootstrap_success_block_path(shell_type)
     else {

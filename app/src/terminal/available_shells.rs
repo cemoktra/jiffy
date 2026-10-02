@@ -89,7 +89,7 @@ enum Config {
 // The concept of specifying an available shell does not exist on non-local filesystems. So we allow
 // dead code so that the concept of the struct can exist, but remove any methods that do anything
 // with it. That way, method calls can still take `Option<AvailableShell>` as an argument, but
-// remote_ttys can just specify `None` for the value.
+// non-local ttys can just specify `None` for the value.
 #[cfg_attr(not(feature = "local_tty"), allow(dead_code,))]
 /// Contains the config describing a 'shell' that can be launched for a new session. Currently falls
 /// into 4 categories:
@@ -148,18 +148,6 @@ impl AvailableShell {
                 executable_path, ..
             }) => Cow::from(format!("Custom: {}", executable_path.display())),
             Config::DockerSandbox { .. } => Cow::from("Docker Sandbox"),
-        }
-    }
-
-    /// Returns a telemetry string that represents the value of the shell without any PII involved.
-    pub fn telemetry_value(&self) -> String {
-        // NOTE: These explicitly do not log the shell path or wsl name, as those can contain PII.
-        match self.state.as_ref() {
-            Config::SystemDefault => "SystemDefault".to_string(),
-            Config::KnownLocal(config) | Config::MSYS2(config) => config.command.clone(),
-            Config::Wsl { .. } => "WSL".to_string(),
-            Config::Custom(_) => "Custom".to_string(),
-            Config::DockerSandbox { .. } => "DockerSandbox".to_string(),
         }
     }
 

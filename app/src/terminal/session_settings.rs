@@ -11,9 +11,9 @@ use warp_core::settings::macros::define_settings_group;
 use warp_core::settings::{RespectUserSyncSetting, SupportedPlatforms, SyncToCloud};
 pub use working_directory_config::*;
 
-use crate::ai::blocklist::agent_view::toolbar_item::AgentToolbarItemKind;
 use crate::context_chips::ContextChipKind;
 use crate::context_chips::prompt::PromptSelection;
+use crate::terminal::cli_agent_footer::toolbar_item::CLIAgentToolbarItemKind;
 
 lazy_static! {
     pub static ref DEFAULT_THRESHOLD_FOR_LONG_RUNNING_NOTIFICATION: Duration =
@@ -133,97 +133,6 @@ impl GithubPrPromptChipDefaultValidation {
     }
 }
 
-/// Shared behavior for toolbar chip selection types.
-/// Each variant stores either a `Default` (resolved via type-specific defaults) or `Custom` left/right item lists.
-pub trait ToolbarChipSelection {
-    fn default_left_items() -> Vec<AgentToolbarItemKind>;
-    fn default_right_items() -> Vec<AgentToolbarItemKind>;
-    fn left_items(&self) -> Vec<AgentToolbarItemKind>;
-    fn right_items(&self) -> Vec<AgentToolbarItemKind>;
-
-    fn left_chips(&self) -> Vec<ContextChipKind> {
-        self.left_items()
-            .into_iter()
-            .filter_map(|item| match item {
-                AgentToolbarItemKind::ContextChip(kind) => Some(kind),
-                _ => None,
-            })
-            .collect()
-    }
-
-    fn right_chips(&self) -> Vec<ContextChipKind> {
-        self.right_items()
-            .into_iter()
-            .filter_map(|item| match item {
-                AgentToolbarItemKind::ContextChip(kind) => Some(kind),
-                _ => None,
-            })
-            .collect()
-    }
-
-    fn all_chips(&self) -> Vec<ContextChipKind> {
-        let mut chips = self.left_chips();
-        chips.extend(self.right_chips());
-        chips
-    }
-
-    fn all_items(&self) -> Vec<AgentToolbarItemKind> {
-        let mut items = self.left_items();
-        items.extend(self.right_items());
-        items
-    }
-}
-
-#[derive(
-    Clone,
-    Debug,
-    Default,
-    Serialize,
-    Deserialize,
-    PartialEq,
-    Eq,
-    schemars::JsonSchema,
-    settings_value::SettingsValue,
-)]
-#[schemars(
-    description = "Agent toolbar layout configuration.",
-    rename_all = "snake_case"
-)]
-pub enum AgentToolbarChipSelection {
-    #[default]
-    #[schemars(description = "Use the default toolbar layout.")]
-    Default,
-    #[schemars(description = "Use a custom arrangement of toolbar items.")]
-    Custom {
-        left: Vec<AgentToolbarItemKind>,
-        right: Vec<AgentToolbarItemKind>,
-    },
-}
-
-impl ToolbarChipSelection for AgentToolbarChipSelection {
-    fn default_left_items() -> Vec<AgentToolbarItemKind> {
-        AgentToolbarItemKind::default_left()
-    }
-
-    fn default_right_items() -> Vec<AgentToolbarItemKind> {
-        AgentToolbarItemKind::default_right()
-    }
-
-    fn left_items(&self) -> Vec<AgentToolbarItemKind> {
-        match self {
-            Self::Default => Self::default_left_items(),
-            Self::Custom { left, .. } => left.clone(),
-        }
-    }
-
-    fn right_items(&self) -> Vec<AgentToolbarItemKind> {
-        match self {
-            Self::Default => Self::default_right_items(),
-            Self::Custom { right, .. } => right.clone(),
-        }
-    }
-}
-
 #[derive(
     Clone,
     Debug,
@@ -245,32 +154,32 @@ pub enum CLIAgentToolbarChipSelection {
     Default,
     #[schemars(description = "Use a custom arrangement of toolbar items.")]
     Custom {
-        left: Vec<AgentToolbarItemKind>,
-        right: Vec<AgentToolbarItemKind>,
+        left: Vec<CLIAgentToolbarItemKind>,
+        right: Vec<CLIAgentToolbarItemKind>,
     },
 }
 
-impl ToolbarChipSelection for CLIAgentToolbarChipSelection {
-    fn default_left_items() -> Vec<AgentToolbarItemKind> {
-        AgentToolbarItemKind::cli_default_left()
-    }
-
-    fn default_right_items() -> Vec<AgentToolbarItemKind> {
-        AgentToolbarItemKind::cli_default_right()
-    }
-
-    fn left_items(&self) -> Vec<AgentToolbarItemKind> {
+impl CLIAgentToolbarChipSelection {
+    pub fn left_items(&self) -> Vec<CLIAgentToolbarItemKind> {
         match self {
-            Self::Default => Self::default_left_items(),
+            Self::Default => CLIAgentToolbarItemKind::default_left(),
             Self::Custom { left, .. } => left.clone(),
         }
     }
 
-    fn right_items(&self) -> Vec<AgentToolbarItemKind> {
+    pub fn right_items(&self) -> Vec<CLIAgentToolbarItemKind> {
         match self {
-            Self::Default => Self::default_right_items(),
+            Self::Default => CLIAgentToolbarItemKind::default_right(),
             Self::Custom { right, .. } => right.clone(),
         }
+    }
+
+    pub fn all_chips(&self) -> Vec<ContextChipKind> {
+        self.left_items()
+            .into_iter()
+            .chain(self.right_items())
+            .filter_map(|item| item.context_chip_kind().cloned())
+            .collect()
     }
 }
 
@@ -284,7 +193,7 @@ define_settings_group!(SessionSettings, settings: [
         surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "session.startup_shell_override",
-        description: "The shell to use when Warp starts up.",
+        description: "The shell to use when Jiffy starts up.",
     },
     new_session_shell_override: NewSessionShellOverride {
         type: Option<NewSessionShell>,
@@ -304,7 +213,7 @@ define_settings_group!(SessionSettings, settings: [
         surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "terminal.input.honor_ps1",
-        description: "Whether to use your shell's PS1 prompt instead of the Warp prompt.",
+        description: "Whether to use your shell's PS1 prompt instead of the Jiffy prompt.",
     },
     saved_prompt: SavedPrompt {
         type: PromptSelection,
@@ -322,25 +231,6 @@ define_settings_group!(SessionSettings, settings: [
         surface: settings::SettingSurfaces::GUI,
         private: true,
     },
-    should_confirm_close_session: ShouldConfirmCloseSession {
-        type: bool,
-        default: true,
-        supported_platforms: SupportedPlatforms::ALL,
-        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
-        surface: settings::SettingSurfaces::GUI,
-        private: false,
-        toml_path: "general.should_confirm_close_session",
-        description: "Whether to show a confirmation dialog when closing a session.",
-    },
-    // Value is saved here but not shown in ui (can't be toggled in settings)
-    should_confirm_shared_session_edit_access: ShouldConfirmSharedSessionEditAccess {
-        type: bool,
-        default: true,
-        supported_platforms: SupportedPlatforms::ALL,
-        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
-        surface: settings::SettingSurfaces::GUI,
-        private: true,
-    }
     notifications: Notifications {
         type: NotificationsSettings,
         default: NotificationsSettings::default(),
@@ -363,29 +253,6 @@ define_settings_group!(SessionSettings, settings: [
         surface: settings::SettingSurfaces::GUI,
         private: true,
         storage_key: "GitPromptDirtyIndicator",
-    },
-    // TODO: Remove this setting when `FeatureFlag::ProfilesDesignRevamp` is cleaned up.
-    // When ProfilesDesignRevamp is enabled, model selectors are always shown in the prompt.
-    // This setting only controls visibility when ProfilesDesignRevamp is disabled.
-    show_model_selectors_in_prompt: ShowModelSelectorsInPrompt {
-        type: bool,
-        default: true,
-        supported_platforms: SupportedPlatforms::ALL,
-        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
-        surface: settings::SettingSurfaces::GUI,
-        private: false,
-        toml_path: "agents.warp_agent.input.show_model_selectors_in_prompt",
-        description: "Whether to show AI model selectors in the input prompt.",
-    },
-    agent_footer_chip_selection: AgentToolbarChipSelectionSetting {
-        type: AgentToolbarChipSelection,
-        default: AgentToolbarChipSelection::default(),
-        supported_platforms: SupportedPlatforms::ALL,
-        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
-        surface: settings::SettingSurfaces::GUI,
-        private: false,
-        toml_path: "agents.warp_agent.input.agent_toolbar_chip_selection_setting",
-        description: "Controls the layout of context chips in the Agent Mode toolbar.",
     },
     cli_agent_footer_chip_selection: CLIAgentToolbarChipSelectionSetting {
         type: CLIAgentToolbarChipSelection,
@@ -414,18 +281,6 @@ define_settings_group!(SessionSettings, settings: [
         default: GithubPrPromptChipDefaultValidation::Unvalidated,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Never,
-        surface: settings::SettingSurfaces::GUI,
-        private: true,
-    },
-    // One-time flag: whether we've already migrated the handoff-to-cloud chip
-    // into a user's custom agent toolbar layout. When `Default`, the chip is
-    // already present via `AgentToolbarItemKind::default_right()`, so this
-    // only matters for `Custom` layouts that were saved before the chip existed.
-    did_add_handoff_chip_to_toolbar: DidAddHandoffChipToToolbar {
-        type: bool,
-        default: false,
-        supported_platforms: SupportedPlatforms::ALL,
-        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::No),
         surface: settings::SettingSurfaces::GUI,
         private: true,
     },

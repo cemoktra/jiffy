@@ -7,19 +7,17 @@ use warpui::elements::{
 use warpui::prelude::Empty;
 use warpui::{AppContext, Element, Entity, TypedActionView, View, ViewContext, ViewHandle};
 
-use super::{AgentFooterButtonTheme, USE_AGENT_KEYSTROKE};
+use super::AgentFooterButtonTheme;
 use crate::terminal::view::{PADDING_LEFT, TerminalModel};
 use crate::ui_components::icons::Icon;
 use crate::view_components::action_button::{
     ActionButton, ButtonSize, KeystrokeSource, TooltipAlignment,
 };
 
-/// Footer view rendered for detected subshell commands, offering both
-/// "Warpify" and "Use agent" buttons in a horizontal row.
+/// Footer view rendered for detected subshell commands, offering a "Warpify" button.
 pub(super) struct WarpifyFooterView {
     terminal_model: Arc<FairMutex<TerminalModel>>,
     warpify_button: ViewHandle<ActionButton>,
-    use_agent_button: ViewHandle<ActionButton>,
     dismiss_button: ViewHandle<ActionButton>,
     /// Whether the footer is currently offering subshell warpification.
     is_active: bool,
@@ -33,22 +31,10 @@ impl WarpifyFooterView {
             ActionButton::new("Warpify subshell", AgentFooterButtonTheme::new(None))
                 .with_icon(Icon::Warp)
                 .with_size(button_size)
-                .with_tooltip("Enable Warp shell integration in this session")
+                .with_tooltip("Enable Jiffy shell integration in this session")
                 .with_tooltip_alignment(TooltipAlignment::Left)
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(WarpifyFooterViewAction::Warpify);
-                })
-        });
-
-        let use_agent_button = ctx.add_typed_action_view(|ctx| {
-            ActionButton::new("Use agent", AgentFooterButtonTheme::new(None))
-                .with_icon(Icon::Agent)
-                .with_keybinding(KeystrokeSource::Fixed(USE_AGENT_KEYSTROKE.clone()), ctx)
-                .with_size(button_size)
-                .with_tooltip("Ask the Warp agent to assist")
-                .with_tooltip_alignment(TooltipAlignment::Left)
-                .on_click(|ctx| {
-                    ctx.dispatch_typed_action(WarpifyFooterViewAction::UseAgent);
                 })
         });
 
@@ -63,7 +49,6 @@ impl WarpifyFooterView {
         Self {
             terminal_model,
             warpify_button,
-            use_agent_button,
             dismiss_button,
             is_active: false,
         }
@@ -99,13 +84,11 @@ impl WarpifyFooterView {
 #[derive(Debug, Clone)]
 pub enum WarpifyFooterViewAction {
     Warpify,
-    UseAgent,
     Dismiss,
 }
 
 pub enum WarpifyFooterViewEvent {
     Warpify,
-    UseAgent,
     Dismiss,
 }
 
@@ -126,7 +109,6 @@ impl View for WarpifyFooterView {
             .with_main_axis_size(MainAxisSize::Max)
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_child(ChildView::new(&self.warpify_button).finish())
-            .with_child(ChildView::new(&self.use_agent_button).finish())
             .with_child(Expanded::new(1., Empty::new().finish()).finish())
             .with_child(ChildView::new(&self.dismiss_button).finish());
 
@@ -154,10 +136,6 @@ impl TypedActionView for WarpifyFooterView {
                     self.clear(ctx);
                     ctx.emit(WarpifyFooterViewEvent::Warpify);
                 }
-            }
-            WarpifyFooterViewAction::UseAgent => {
-                self.clear(ctx);
-                ctx.emit(WarpifyFooterViewEvent::UseAgent);
             }
             WarpifyFooterViewAction::Dismiss => {
                 self.clear(ctx);

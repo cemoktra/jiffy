@@ -161,10 +161,6 @@ impl SearchBar {
         }
     }
 
-    pub fn with_style(&mut self, styles: UiComponentStyles) {
-        self.custom_styles = self.custom_styles.merge(styles);
-    }
-
     pub fn focus_search_bar(&mut self, ctx: &mut ViewContext<Self>) {
         ctx.focus(&self.editor);
         ctx.notify();

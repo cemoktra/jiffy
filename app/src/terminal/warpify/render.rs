@@ -1,9 +1,8 @@
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
-use pathfinder_color::ColorU;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::Vector2F;
 use warp_core::ui::appearance::Appearance;
-use warp_core::ui::theme::{Fill, WarpTheme};
+use warp_core::ui::theme::{AnsiColorIdentifier, Fill, WarpTheme};
 use warpui::elements::{
     Align, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Flex, FormattedTextElement,
     HighlightedHyperlink, Icon, MouseStateHandle, ParentElement, Radius, Rect, Shrinkable, Stack,
@@ -15,8 +14,8 @@ use warpui::{AppContext, Element, EventContext, PaintContext, SingletonEntity as
 
 use super::SubshellSource;
 use super::settings::WarpifySettings;
-use crate::ai::blocklist::inline_action::inline_action_icons;
 use crate::ui_components::blended_colors;
+use crate::ui_components::icons::Icon as UiIcon;
 
 /// The flag font size varies with the monospace font width, but if it gets too big it will start
 /// to overlap with the prompt grid. This should eventually be fixed by growing the block height to
@@ -27,7 +26,6 @@ const SUBSHELL_FLAG_HORIZONTAL_PADDING: f32 = 8.;
 const SUBSHELL_FLAG_VERTICAL_PADDING: f32 = 1.;
 
 // TODO(liam): remove this once figuring out how to get theme color in layout()
-const WARP_DRIVE_ENV_VAR_COLLECTION_ICON_COLOR: u32 = 0xC464FFFF;
 const ICON_MARGIN: f32 = 4.;
 const TERMINAL_ICON: &str = "bundled/svg/terminal.svg";
 pub const HORIZONTAL_TEXT_MARGIN: f32 = 20.;
@@ -86,10 +84,16 @@ pub fn header_row(
 }
 
 fn green_check_icon(appearance: &Appearance, size: f32) -> Box<dyn Element> {
-    ConstrainedBox::new(inline_action_icons::green_check_icon(appearance).finish())
-        .with_max_height(size)
-        .with_max_width(size)
-        .finish()
+    ConstrainedBox::new(
+        Icon::new(
+            UiIcon::Check.into(),
+            AnsiColorIdentifier::Green.to_ansi_color(&appearance.theme().terminal_colors().normal),
+        )
+        .finish(),
+    )
+    .with_max_height(size)
+    .with_max_width(size)
+    .finish()
 }
 
 /// UI helper to render the ssh command that caused the warpification prompt.
@@ -202,13 +206,7 @@ pub fn render_never_warpify_ssh_link(
 }
 
 fn get_subshell_flag_info(subshell_source: &SubshellSource, theme: &WarpTheme) -> (String, Fill) {
-    match subshell_source {
-        SubshellSource::EnvVarCollection(environment_name) => (
-            environment_name.to_string(),
-            Fill::Solid(ColorU::from_u32(WARP_DRIVE_ENV_VAR_COLLECTION_ICON_COLOR)),
-        ),
-        SubshellSource::Command(command) => (command.to_string(), theme.subshell_background()),
-    }
+    (subshell_source.0.clone(), theme.subshell_background())
 }
 
 /// A single solid color vertical bar positioned on the left-hand side of a blocklist element

@@ -1,0 +1,51 @@
+[package]
+name = "agent_context"
+version = "0.1.0"
+edition = "2024"
+publish.workspace = true
+license.workspace = true
+
+[features]
+jemalloc = []
+local_fs = []
+
+[dependencies]
+anyhow.workspace = true
+cfg-if.workspace = true
+chrono.workspace = true
+dirs.workspace = true
+ignore = "0.4.23"
+itertools.workspace = true
+lazy_static.workspace = true
+log.workspace = true
+rayon.workspace = true
+regex.workspace = true
+repo_metadata.workspace = true
+persistence.workspace = true
+serde.workspace = true
+serde_yaml.workspace = true
+shellexpand.workspace = true
+streaming-iterator.workspace = true
+strum.workspace = true
+strum_macros.workspace = true
+thiserror.workspace = true
+warp_core.workspace = true
+warp_errors.workspace = true
+warp_util.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+nix.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+arborium.workspace = true
+futures.workspace = true
+languages.workspace = true
+syntax_tree.workspace = true
+
+[dev-dependencies]
+serial_test = "0.8.0"
+tempfile.workspace = true
+warp_core = { workspace = true, features = ["test-util"] }
+
+[build-dependencies]
+anyhow.workspace = true

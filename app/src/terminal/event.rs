@@ -1,21 +1,16 @@
 use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
-use std::time::Duration;
 
 use instant::Instant;
-pub use remote_server::setup::RemoteServerSetupState;
 pub use warp_terminal::event::{ExecutedExecutorCommandEvent, ParseGeneratorOutputError};
 use warp_util::lazy::Lazy;
 
 use super::history::HistoryEntry;
-use super::model::ansi::{ExternalShellWidgetSelectionValue, FinishUpdateValue};
+use super::model::ansi::ExternalShellWidgetSelectionValue;
 use super::model::block::BlockId;
-use super::model::lifecycle::LifecycleRecoveryRecord;
 use super::model::session::{SessionId, SessionInfo};
 use super::model::terminal_model::{BlockIndex, ExitReason};
-use crate::server::ids::SyncId;
-use crate::server::telemetry::ImageProtocol;
 use crate::terminal::ClipboardType;
 use crate::terminal::model::block::{BlockMetadata, SerializedBlock};
 use crate::terminal::model::blocks::BlockList;
@@ -51,8 +46,6 @@ pub enum Event {
     /// the requested-command finish detector) should keep listening only to
     /// `BlockMetadataReceived` so they preserve their once-per-block contract.
     BlockWorkingDirectoryUpdated(BlockWorkingDirectoryUpdatedEvent),
-    /// Sent after a background block is started and added to the block list.
-    BackgroundBlockStarted,
     ClipboardStore(ClipboardType, String),
     ClipboardLoad(
         ClipboardType,
@@ -70,13 +63,6 @@ pub enum Event {
     /// An indication that a successful SSH connection was initiated via the
     /// SSH wrapper.  The argument is the name of the remote shell.
     SSH(String),
-    /// Emitted when the remote shell for a session is about to exit, so
-    /// per-session resources (e.g. the `ssh … remote-server-proxy` child that
-    /// holds a multiplexed channel on the ControlMaster) can be torn down
-    /// before the outer ssh tunnel starts closing.
-    ExitShell {
-        session_id: SessionId,
-    },
     /// Sent when the model detects an SSH ControlMaster error, which means that
     /// completions reliant on command execution will not work.
     SSHControlMasterError,
@@ -100,41 +86,13 @@ pub enum Event {
     /// the running program. The shell stores these characters, inserts them into its internal line
     /// buffer, and re-echoes them after Precmd.
     Typeahead,
-    /// Emitted when the agent is tagged in or out of the active block.
-    /// Users "Tag an agent in" when they ask the agent to take over a long running command
-    /// that was started outside of a conversation (and they tag the agent out when they take control back).
-    AgentTaggedInChanged {
-        block_id: BlockId,
-        is_tagged_in: bool,
-    },
     Handler(HandlerEvent),
-    /// Carries non-UGC lifecycle diagnostics to the model dispatcher for telemetry.
-    LifecycleRecovery(LifecycleRecoveryRecord),
-    /// Emitted when the remote server binary has been successfully checked or
-    /// installed and is ready. The session is initialized independently on
-    /// `Bootstrapped`; when the remote server later connects, the client is
-    /// attached to the existing session's `RemoteServerCommandExecutor` via
-    /// the `RemoteServerManagerEvent::SessionConnected` subscription in
-    /// `Sessions::new`.
-    RemoteServerReady {
-        session_id: SessionId,
-    },
-    /// Emitted when the remote server setup failed. The session falls back to
-    /// the ControlMaster-based `RemoteCommandExecutor`.
-    RemoteServerFailed {
-        session_id: SessionId,
-        error: String,
-    },
-    /// Emitted when the assisted auto-update has completed and we're ready to
-    /// relaunch the app.
-    FinishUpdate(FinishUpdateValue),
     ExternalShellWidgetSelection(ExternalShellWidgetSelectionValue),
     TextSelectionChanged,
     ShellSpawned(ShellType),
     ImageReceived {
         image_id: u32,
         image_data: Vec<u8>,
-        image_protocol: ImageProtocol,
     },
     BootstrapPrecmdDone,
     /// A pluggable notification triggered via OSC 9 or OSC 777 escape sequences.
@@ -166,11 +124,10 @@ impl From<warp_terminal::event::Event> for Event {
             warp_terminal::event::Event::ImageReceived {
                 image_id,
                 image_data,
-                image_protocol,
+                image_protocol: _,
             } => Self::ImageReceived {
                 image_id,
                 image_data,
-                image_protocol,
             },
         }
     }
@@ -215,15 +172,11 @@ pub struct BootstrappedEvent {
     // functionally needs to be wrapped in an `Box`.
     pub session_info: Box<SessionInfo>,
     pub restored_block_commands: Vec<HistoryEntry>,
-    /// The time we spent sourcing the user's rcfiles, in seconds.  This may be
-    /// None if the information was not provided by the shell.
-    pub rcfiles_duration_seconds: Option<f64>,
 }
 
 #[derive(Clone)]
 pub struct BlockCompletedEvent {
     pub block_type: BlockType,
-    pub num_secrets_obfuscated: usize,
     pub block_index: BlockIndex,
     pub block_id: BlockId,
     pub session_id: Option<SessionId>,
@@ -232,19 +185,7 @@ pub struct BlockCompletedEvent {
 
 #[derive(Clone)]
 pub struct AfterBlockCompletedEvent {
-    /// The delay from the CommandFinished ansi hook to the Precmd hook.
-    /// This value is only provided for the blocks that the user directly
-    /// executes (so it's not provided if this is a restored block from session
-    /// restoration or a bootstrapping block).
-    pub command_finished_to_precmd_delay: Option<Duration>,
     pub block_type: BlockType,
-    pub num_secrets_obfuscated: usize,
-
-    /// If the completed block was a workflow, this is its id.
-    pub cloud_workflow_id: Option<SyncId>,
-
-    /// If the completed block had an env var object associated.
-    pub cloud_env_var_collection_id: Option<SyncId>,
 }
 
 #[derive(Clone, Debug)]
@@ -335,9 +276,6 @@ pub struct UserBlockCompleted {
     /// Forced secrets to be obfuscated as well.
     pub output_truncated_with_obfuscated_secrets: Lazy<String, BlockList>,
 
-    /// `true` if the block was run as a requested command or was part of a CLI subagent interaction.
-    pub was_part_of_agent_interaction: bool,
-
     /// Time that we started the command grid (i.e. immediately after the user
     /// hit enter).
     pub started_at: Option<Instant>,
@@ -359,7 +297,6 @@ impl UserBlockCompleted {
         command_with_obfuscated_secrets: Lazy<String, BlockList>,
         output_truncated: Lazy<String, BlockList>,
         output_truncated_with_obfuscated_secrets: Lazy<String, BlockList>,
-        was_part_of_agent_interaction: bool,
         started_at: Option<Instant>,
         num_output_lines: u64,
         num_output_lines_truncated: u64,
@@ -371,7 +308,6 @@ impl UserBlockCompleted {
             command_with_obfuscated_secrets,
             output_truncated,
             output_truncated_with_obfuscated_secrets,
-            was_part_of_agent_interaction,
             started_at,
             num_output_lines,
             num_output_lines_truncated,
@@ -388,7 +324,6 @@ impl UserBlockCompleted {
         command_with_obfuscated_secrets: String,
         output_truncated: String,
         output_truncated_with_obfuscated_secrets: String,
-        was_part_of_agent_interaction: bool,
         started_at: Option<Instant>,
         num_output_lines: u64,
         num_output_lines_truncated: u64,
@@ -400,7 +335,6 @@ impl UserBlockCompleted {
             Lazy::provided(command_with_obfuscated_secrets),
             Lazy::provided(output_truncated),
             Lazy::provided(output_truncated_with_obfuscated_secrets),
-            was_part_of_agent_interaction,
             started_at,
             num_output_lines,
             num_output_lines_truncated,
@@ -425,7 +359,6 @@ impl Debug for Event {
                 event.block_metadata, event.is_done_bootstrapping
             ),
             Event::AfterBlockStarted { .. } => write!(f, "BlockExecutionStarted"),
-            Event::BackgroundBlockStarted => write!(f, "BackgroundBlockStarted"),
             Event::VisibleBootstrapBlock => write!(f, "VisibleBootstrapBlock"),
             Event::Title(title) => write!(f, "Title({title})"),
             Event::ClipboardStore(_, text) => write!(f, "ClipboardStore({text})"),
@@ -455,27 +388,7 @@ impl Debug for Event {
             Event::PromptUpdated => write!(f, "PromptUpdated"),
             Event::HonorPS1OutOfSync => write!(f, "HonorPS1OutOfSync"),
             Event::Typeahead => write!(f, "Typeahead"),
-            Event::AgentTaggedInChanged {
-                block_id,
-                is_tagged_in,
-            } => {
-                write!(
-                    f,
-                    "AgentTaggedInChanged(block_id: {block_id:?}, is_tagged_in: {is_tagged_in})"
-                )
-            }
             Event::Handler(handler_event) => write!(f, "Handler({handler_event:?}))"),
-            Event::LifecycleRecovery(record) => write!(f, "LifecycleRecovery({record:?})"),
-            Event::RemoteServerReady { session_id } => {
-                write!(f, "RemoteServerReady(session: {session_id:?})")
-            }
-            Event::RemoteServerFailed { session_id, error } => {
-                write!(
-                    f,
-                    "RemoteServerFailed(session: {session_id:?}, error: {error})"
-                )
-            }
-            Event::FinishUpdate(data) => write!(f, "FinishUpdate({})", data.update_id),
             Event::ExternalShellWidgetSelection(data) => {
                 write!(
                     f,
@@ -490,9 +403,6 @@ impl Debug for Event {
             }
             Event::BootstrapPrecmdDone => write!(f, "BootstrapPrecmdDone"),
             Event::PluggableNotification { .. } => write!(f, "PluggableNotification"),
-            Event::ExitShell { session_id } => {
-                write!(f, "ExitShell(session: {session_id:?})")
-            }
         }
     }
 }

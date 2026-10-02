@@ -173,7 +173,6 @@ pub enum Icon {
     PieChart,
     Phone,
     Navigation,
-    AutoUpdate,
     Bell,
     GitBranch,
     CheckSkinny,
@@ -297,8 +296,7 @@ pub enum Icon {
     /// the **call site's responsibility** — this variant carries the shape
     /// only. Most surfaces tint it with the surrounding theme color (light
     /// theme: dark glyph; dark theme: light glyph). Kept distinct from
-    /// `Warp` so agent surfaces and non-agent Warp UI (e.g.
-    /// `QueryFilter::Drive`) can evolve independently.
+    /// `Warp` so agent surfaces and non-agent Warp UI can evolve independently.
     Agent,
     Conversation,
     Prompt,
@@ -521,7 +519,6 @@ impl From<Icon> for &'static str {
             Icon::PieChart => "bundled/svg/turn-usage-pie.svg",
             Icon::Phone => "bundled/svg/phone.svg",
             Icon::Navigation => "bundled/svg/navigation.svg",
-            Icon::AutoUpdate => "bundled/svg/autoupdate.svg",
             Icon::Bell => "bundled/svg/bell.svg",
             Icon::GitBranch => "bundled/svg/git-branch-02.svg",
             Icon::CheckSkinny => "bundled/svg/check-skinny.svg",

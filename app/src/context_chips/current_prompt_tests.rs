@@ -15,9 +15,6 @@ use warpui_extras::user_preferences;
 
 use super::{ActiveChipSurfaces, ChipUpdateStatus, CurrentPrompt, PromptContext};
 use crate::CLIAgentSessionsModel;
-use crate::ai::blocklist::agent_view::toolbar_item::AgentToolbarItemKind;
-use crate::auth::AuthStateProvider;
-use crate::auth::auth_manager::AuthManager;
 #[cfg(feature = "local_fs")]
 use crate::code_review::diff_state::DiffStats;
 #[cfg(feature = "local_fs")]
@@ -31,11 +28,10 @@ use crate::context_chips::prompt::Prompt;
 use crate::context_chips::{ChipAvailability, ChipDisabledReason, ContextChipKind};
 use crate::features::FeatureFlag;
 use crate::menu::MenuItem;
-use crate::server::server_api::ServerApiProvider;
-use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
 use crate::settings::WarpPromptSeparator;
 #[cfg(windows)]
 use crate::system::SystemInfo;
+use crate::terminal::cli_agent_footer::toolbar_item::CLIAgentToolbarItemKind;
 use crate::terminal::cli_agent_sessions::{
     CLIAgentInputState, CLIAgentSession, CLIAgentSessionContext, CLIAgentSessionStatus,
 };
@@ -43,9 +39,7 @@ use crate::terminal::model::block::BlockMetadata;
 use crate::terminal::model::session::{
     CommandExecutor, ExecuteCommandOptions, SessionId, SessionInfo, Sessions,
 };
-use crate::terminal::session_settings::{
-    AgentToolbarChipSelection, CLIAgentToolbarChipSelection, SessionSettings, ToolbarChipSelection,
-};
+use crate::terminal::session_settings::{CLIAgentToolbarChipSelection, SessionSettings};
 use crate::terminal::shell::Shell;
 use crate::terminal::view::PromptPosition;
 use crate::terminal::{CLIAgent, History};
@@ -56,6 +50,7 @@ use crate::util::git::PrInfo;
 fn git_status_metadata(branch: &str) -> GitStatusMetadata {
     GitStatusMetadata {
         current_branch_name: branch.to_string(),
+        prompt_label: branch.to_string(),
         main_branch_name: "main".to_string(),
         stats_against_head: DiffStats::default(),
         branch_tracking_status: GitBranchTrackingStatus::new(branch.to_string(), None, 0, 0),
@@ -261,14 +256,8 @@ fn test_shell_chip_is_disabled_when_required_executable_is_missing() {
                 Box::<user_preferences::in_memory::InMemoryPreferences>::default(),
             )
         });
-        app.add_singleton_model(|_| ServerApiProvider::new_for_test());
-        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
-        app.add_singleton_model(AppTelemetryContextProvider::new_context_provider);
-        app.add_singleton_model(AuthManager::new_for_test);
         app.add_singleton_model(|_| crate::settings::manager::SettingsManager::default());
         crate::settings::InputSettings::register(&mut app);
-        app.update(crate::settings::AISettings::register_and_subscribe_to_events);
-        app.add_singleton_model(crate::workspaces::user_workspaces::UserWorkspaces::default_mock);
         #[cfg(windows)]
         app.add_singleton_model(SystemInfo::new);
 
@@ -279,7 +268,6 @@ fn test_shell_chip_is_disabled_when_required_executable_is_missing() {
                 SessionInfo::new_for_test().with_id(session_id),
                 "test command".to_string(),
                 vec![],
-                None,
                 ctx,
             );
             sessions
@@ -411,16 +399,10 @@ fn test_disabling_chips() {
                 Box::<user_preferences::in_memory::InMemoryPreferences>::default(),
             )
         });
-        app.add_singleton_model(|_| ServerApiProvider::new_for_test());
-        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
-        app.add_singleton_model(AppTelemetryContextProvider::new_context_provider);
-        app.add_singleton_model(AuthManager::new_for_test);
 
         // Register required singleton models to fix the singleton model error
         app.add_singleton_model(|_| crate::settings::manager::SettingsManager::default());
         crate::settings::InputSettings::register(&mut app);
-        app.update(crate::settings::AISettings::register_and_subscribe_to_events);
-        app.add_singleton_model(crate::workspaces::user_workspaces::UserWorkspaces::default_mock);
         #[cfg(windows)]
         app.add_singleton_model(SystemInfo::new);
 
@@ -432,7 +414,6 @@ fn test_disabling_chips() {
                 SessionInfo::new_for_test().with_id(session_id),
                 "test command".to_string(),
                 vec![],
-                None,
                 ctx,
             );
             sessions
@@ -528,22 +509,10 @@ fn test_chips_to_run_only_includes_active_surface_configurations() {
         app.update(|ctx| {
             SessionSettings::handle(ctx).update(ctx, |settings, ctx| {
                 settings
-                    .agent_footer_chip_selection
-                    .set_value(
-                        AgentToolbarChipSelection::Custom {
-                            left: vec![AgentToolbarItemKind::ContextChip(
-                                ContextChipKind::WorkingDirectory,
-                            )],
-                            right: vec![],
-                        },
-                        ctx,
-                    )
-                    .unwrap();
-                settings
                     .cli_agent_footer_chip_selection
                     .set_value(
                         CLIAgentToolbarChipSelection::Custom {
-                            left: vec![AgentToolbarItemKind::ContextChip(
+                            left: vec![CLIAgentToolbarItemKind::ContextChip(
                                 ContextChipKind::ShellGitBranch,
                             )],
                             right: vec![],
@@ -571,13 +540,6 @@ fn test_chips_to_run_only_includes_active_surface_configurations() {
             );
             assert_eq!(
                 chips_for(ActiveChipSurfaces {
-                    agent_footer: true,
-                    ..Default::default()
-                }),
-                vec![ContextChipKind::WorkingDirectory]
-            );
-            assert_eq!(
-                chips_for(ActiveChipSurfaces {
                     cli_agent_footer: true,
                     ..Default::default()
                 }),
@@ -586,14 +548,9 @@ fn test_chips_to_run_only_includes_active_surface_configurations() {
             assert_eq!(
                 chips_for(ActiveChipSurfaces {
                     prompt: true,
-                    agent_footer: true,
                     cli_agent_footer: true,
                 }),
-                vec![
-                    ContextChipKind::Username,
-                    ContextChipKind::WorkingDirectory,
-                    ContextChipKind::ShellGitBranch,
-                ]
+                vec![ContextChipKind::Username, ContextChipKind::ShellGitBranch]
             );
         });
     });
@@ -615,14 +572,9 @@ fn test_cli_agent_footer_chips_require_a_visible_supported_footer() {
                 Box::<user_preferences::in_memory::InMemoryPreferences>::default(),
             )
         });
-        app.add_singleton_model(|_| ServerApiProvider::new_for_test());
-        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
-        app.add_singleton_model(AppTelemetryContextProvider::new_context_provider);
-        app.add_singleton_model(AuthManager::new_for_test);
         app.add_singleton_model(|_| crate::settings::manager::SettingsManager::default());
         crate::settings::InputSettings::register(&mut app);
-        app.update(crate::settings::AISettings::register_and_subscribe_to_events);
-        app.add_singleton_model(crate::workspaces::user_workspaces::UserWorkspaces::default_mock);
+        crate::settings::CLIAgentSettings::register(&mut app);
         app.add_singleton_model(|_| CLIAgentSessionsModel::new());
         #[cfg(windows)]
         app.add_singleton_model(SystemInfo::new);
@@ -672,7 +624,7 @@ fn test_cli_agent_footer_chips_require_a_visible_supported_footer() {
         CLIAgentSessionsModel::handle(&app).update(&mut app, |sessions, ctx| {
             sessions.set_session(terminal_view_id, session_for(CLIAgent::Claude), ctx);
         });
-        crate::settings::AISettings::handle(&app).update(&mut app, |settings, ctx| {
+        crate::settings::CLIAgentSettings::handle(&app).update(&mut app, |settings, ctx| {
             settings
                 .should_render_cli_agent_footer
                 .set_value(false, ctx)
@@ -684,7 +636,6 @@ fn test_cli_agent_footer_chips_require_a_visible_supported_footer() {
 
 #[test]
 fn test_ps1_without_active_agent_surface_runs_no_footer_generators() {
-    let _flag_guard = FeatureFlag::AgentView.override_enabled(true);
     App::test((), |mut app| async move {
         let session_id = SessionId::from(321);
         app.add_singleton_model(|_| Prompt::mock());
@@ -705,14 +656,8 @@ fn test_ps1_without_active_agent_surface_runs_no_footer_generators() {
                 settings.honor_ps1.set_value(true, ctx).unwrap();
             });
         });
-        app.add_singleton_model(|_| ServerApiProvider::new_for_test());
-        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
-        app.add_singleton_model(AppTelemetryContextProvider::new_context_provider);
-        app.add_singleton_model(AuthManager::new_for_test);
         app.add_singleton_model(|_| crate::settings::manager::SettingsManager::default());
         crate::settings::InputSettings::register(&mut app);
-        app.update(crate::settings::AISettings::register_and_subscribe_to_events);
-        app.add_singleton_model(crate::workspaces::user_workspaces::UserWorkspaces::default_mock);
         #[cfg(windows)]
         app.add_singleton_model(SystemInfo::new);
 
@@ -723,7 +668,6 @@ fn test_ps1_without_active_agent_surface_runs_no_footer_generators() {
                 SessionInfo::new_for_test().with_id(session_id),
                 "test command".to_string(),
                 vec![],
-                None,
                 ctx,
             );
             sessions
@@ -936,6 +880,7 @@ fn test_git_status_change_updates_branch_status_chip_value() {
             model.set_metadata_for_test(
                 Some(GitStatusMetadata {
                     current_branch_name: "feature-branch".to_string(),
+                    prompt_label: "feature-branch".to_string(),
                     main_branch_name: "main".to_string(),
                     stats_against_head: DiffStats::default(),
                     branch_tracking_status: branch_tracking_status.clone(),

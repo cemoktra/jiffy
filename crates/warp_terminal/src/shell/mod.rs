@@ -5,7 +5,6 @@ use std::ops::Deref;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
-use channel_versions::overrides::TargetOS;
 use enum_iterator::Sequence;
 use itertools::Itertools;
 use lazy_static::lazy_static;
@@ -243,6 +242,14 @@ impl ShellName {
     }
 }
 
+/// The operating system of the host a shell runs on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TargetOS {
+    MacOS,
+    Linux,
+    Windows,
+}
+
 #[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, Serialize, Deserialize, Sequence)]
 pub enum ShellType {
     Zsh,
@@ -401,7 +408,7 @@ impl ShellType {
                 format!(" warp_run_generator_command_native_completions {hex_encoded_line}")
             }
             ShellType::PowerShell => {
-                format!("Warp-Run-GeneratorCommand-NativeCompletion {hex_encoded_line}")
+                format!("Jiffy-Run-GeneratorCommand-NativeCompletion {hex_encoded_line}")
             }
         }
     }

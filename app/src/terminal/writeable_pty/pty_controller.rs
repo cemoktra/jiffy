@@ -14,8 +14,6 @@ use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity};
 
 use super::Message;
 use crate::SessionSettings;
-use crate::ai::agent::AIAgentPtyWriteMode;
-use crate::terminal::input::CommandExecutionSource;
 use crate::terminal::line_editor_status::{LineEditorStatus, LineEditorStatusEvent};
 use crate::terminal::model::ansi::Handler;
 use crate::terminal::model::completions::ShellCompletion;
@@ -53,12 +51,6 @@ enum PtyWrite {
     Bytes {
         /// The bytes to be written.
         bytes: Cow<'static, [u8]>,
-    },
-    AgentInput {
-        /// The bytes to be written.
-        bytes: Cow<'static, [u8]>,
-        /// The `mode` for the agent's write.
-        mode: AIAgentPtyWriteMode,
     },
     RunNativeShellCompletions {
         command: String,
@@ -486,29 +478,13 @@ impl<T: EventLoopSender> PtyController<T> {
         &mut self,
         command: &str,
         shell_type: ShellType,
-        source: CommandExecutionSource,
         ctx: &mut ModelContext<Self>,
     ) -> StartCommandOutcome {
         {
             let mut model = self.terminal_model.lock();
 
             // Explicitly start the block now that the command is executed.
-            let outcome = match source {
-                CommandExecutionSource::AI { metadata } => {
-                    model.start_command_execution_with_ai_metadata(metadata)
-                }
-                CommandExecutionSource::SharedSession {
-                    participant_id,
-                    ai_metadata,
-                    ..
-                } => model.start_command_execution_for_shared_session(participant_id, ai_metadata),
-                CommandExecutionSource::User | CommandExecutionSource::QueuedCommand => {
-                    model.start_command_execution()
-                }
-                CommandExecutionSource::EnvVarCollection { metadata } => {
-                    model.start_command_execution_from_env_var_collection(metadata)
-                }
-            };
+            let outcome = model.start_command_execution();
             if !outcome.is_accepted() {
                 return outcome;
             }
@@ -571,22 +547,6 @@ impl<T: EventLoopSender> PtyController<T> {
         }
     }
 
-    /// Writes agent input to the PTY.
-    pub fn write_agent_bytes<B: Into<Cow<'static, [u8]>>>(
-        &mut self,
-        bytes: B,
-        mode: &AIAgentPtyWriteMode,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        self.send_write_to_event_loop(
-            PtyWrite::AgentInput {
-                bytes: bytes.into(),
-                mode: *mode,
-            },
-            ctx,
-        );
-    }
-
     /// Writes user input to the PTY.
     ///
     /// This should only be called for non-command input (e.g. input that should be passed through
@@ -630,11 +590,6 @@ impl<T: EventLoopSender> PtyController<T> {
                 on_write_fn,
                 Some(shell_type),
             ),
-            PtyWrite::AgentInput { bytes, mode } => {
-                let decorated_bytes =
-                    mode.decorate_bytes(bytes.into_owned(), self.is_bracketed_paste_enabled);
-                (decorated_bytes.into(), false, None, None)
-            }
             PtyWrite::Bytes { bytes } => (bytes, false, None, None),
             PtyWrite::RunNativeShellCompletions {
                 command,

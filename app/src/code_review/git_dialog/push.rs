@@ -8,25 +8,23 @@
 
 use std::collections::HashMap;
 
-use warp_core::send_telemetry_from_ctx;
 use warp_core::ui::appearance::Appearance;
 use warp_errors::report_error;
-use warpui::ViewContext;
 use warpui::elements::{
     Border, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container, CornerRadius,
     CrossAxisAlignment, Element, Flex, Hoverable, MainAxisAlignment, MainAxisSize,
     MouseStateHandle, ParentElement, Radius, ScrollbarWidth, Text,
 };
 use warpui::platform::Cursor;
+use warpui::ui_components::components::{UiComponent, UiComponentStyles};
+use warpui::{AppContext, SingletonEntity, ViewContext, ViewHandle};
 
 use crate::code::editor::{add_color, remove_color};
 use crate::code_review::git_dialog::{
     GitDialog, GitDialogAction, GitDialogEvent, GitDialogMode, render_branch_section,
     render_chevron_icon, render_file_list, show_toast, user_facing_git_error,
 };
-use crate::code_review::telemetry_event::{
-    CodeReviewTelemetryEvent, GitDialogStatus, GitOperationKind,
-};
+use crate::editor::{EditorOptions, EditorView, Event as EditorEvent, TextOptions};
 use crate::ui_components::icons::Icon;
 use crate::util::git::Commit;
 
@@ -42,6 +40,8 @@ pub struct PushState {
     expanded: HashMap<String, bool>,
     commit_mouse_states: HashMap<String, MouseStateHandle>,
     commits_scroll_state: ClippedScrollStateHandle,
+    /// Name for the jj bookmark to create and push, shown when the committed change has none.
+    bookmark_editor: Option<ViewHandle<EditorView>>,
 }
 
 pub(super) fn new_state(publish: bool, commits: Vec<Commit>) -> PushState {
@@ -55,7 +55,78 @@ pub(super) fn new_state(publish: bool, commits: Vec<Commit>) -> PushState {
         expanded: HashMap::new(),
         commit_mouse_states,
         commits_scroll_state: ClippedScrollStateHandle::default(),
+        bookmark_editor: None,
     }
+}
+
+/// In a jj workspace whose committed change has no bookmark yet, asks for the bookmark name to
+/// push, prefilled with jj's own `push-<change id>` convention.
+#[cfg(feature = "local_fs")]
+pub(super) fn maybe_request_bookmark_name(me: &GitDialog, ctx: &mut ViewContext<GitDialog>) {
+    use warp_util::jj::JjSnapshot;
+
+    let Some(repo_path) = me
+        .repo_location()
+        .to_local_path()
+        .filter(|path| crate::util::jj::is_jj_workspace(path))
+        .map(std::path::Path::to_path_buf)
+    else {
+        return;
+    };
+    ctx.spawn(
+        async move { crate::util::jj::working_copy_info(&repo_path, JjSnapshot::Skip).await },
+        |me, result, ctx| {
+            let Ok(info) = result else {
+                return;
+            };
+            if info.bookmark.is_some() {
+                return;
+            }
+            let editor = ctx.add_typed_action_view(|ctx| {
+                let mut editor = EditorView::new(
+                    EditorOptions {
+                        text: TextOptions {
+                            font_family_override: Some(Appearance::as_ref(ctx).ui_font_family()),
+                            ..Default::default()
+                        },
+                        single_line: true,
+                        ..Default::default()
+                    },
+                    ctx,
+                );
+                editor.set_placeholder_text("Bookmark name", ctx);
+                editor.system_reset_buffer_text(&format!("push-{}", info.change_id), ctx);
+                editor
+            });
+            ctx.subscribe_to_view(&editor, |me, _, event, ctx| match event {
+                EditorEvent::Escape => {
+                    if !me.loading() {
+                        ctx.emit(GitDialogEvent::Cancelled);
+                    }
+                }
+                EditorEvent::Edited(_) => {
+                    me.refresh_confirm_enabled(ctx);
+                    ctx.notify();
+                }
+                _ => {}
+            });
+            if let GitDialogMode::Push(state) = me.mode_mut() {
+                state.bookmark_editor = Some(editor);
+            }
+            me.refresh_confirm_enabled(ctx);
+            ctx.notify();
+        },
+    );
+}
+
+/// The bookmark name typed into the push dialog, if it asks for one.
+fn requested_bookmark_name(state: &PushState, app: &AppContext) -> Option<String> {
+    let editor = state.bookmark_editor.as_ref()?;
+    Some(editor.as_ref(app).buffer_text(app).trim().to_string())
+}
+
+pub(super) fn is_ready_to_confirm(state: &PushState, app: &AppContext) -> bool {
+    requested_bookmark_name(state, app).is_none_or(|name| !name.is_empty())
 }
 
 pub(super) fn confirm_label(publish: bool) -> &'static str {
@@ -97,11 +168,15 @@ pub(super) fn handle_sub_action(
 }
 
 pub(super) fn start_confirm(me: &mut GitDialog, ctx: &mut ViewContext<GitDialog>) {
-    let publish = match me.mode() {
-        GitDialogMode::Push(state) => state.publish,
+    let (publish, requested_bookmark) = match me.mode() {
+        GitDialogMode::Push(state) => (state.publish, requested_bookmark_name(state, ctx)),
         _ => return,
     };
-    let branch = me.branch_name().to_string();
+    let branch = match requested_bookmark {
+        Some(name) if name.is_empty() => return,
+        Some(name) => name,
+        None => me.branch_name().to_string(),
+    };
 
     me.set_loading(loading_label(publish), ctx);
 
@@ -110,17 +185,12 @@ pub(super) fn start_confirm(me: &mut GitDialog, ctx: &mut ViewContext<GitDialog>
     });
 }
 
-/// Shared push completion: toast + telemetry + close.
+/// Shared push completion: toast + close.
 pub(super) fn finish_push(
-    me: &GitDialog,
     publish: bool,
     result: anyhow::Result<()>,
     ctx: &mut ViewContext<GitDialog>,
 ) {
-    let (status, error) = match &result {
-        Ok(_) => (GitDialogStatus::Succeeded, None),
-        Err(err) => (GitDialogStatus::Failed, Some(err.to_string())),
-    };
     match result {
         Ok(_) => {
             let toast_msg = if publish {
@@ -135,19 +205,6 @@ pub(super) fn finish_push(
             show_toast(user_facing_git_error(&e.to_string()), ctx);
         }
     }
-    send_telemetry_from_ctx!(
-        CodeReviewTelemetryEvent::GitDialogCompleted {
-            is_local: Some(!me.repo_location().is_remote()),
-            operation: if publish {
-                GitOperationKind::Publish
-            } else {
-                GitOperationKind::Push
-            },
-            status,
-            error,
-        },
-        ctx
-    );
     ctx.emit(GitDialogEvent::Completed);
 }
 
@@ -156,8 +213,12 @@ pub(super) fn render_body(
     branch_name: &str,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
+    let branch_section = match &state.bookmark_editor {
+        Some(editor) => render_bookmark_editor(editor, appearance),
+        None => render_branch_section(branch_name, appearance),
+    };
     let mut body = Flex::column().with_child(
-        Container::new(render_branch_section(branch_name, appearance))
+        Container::new(branch_section)
             .with_margin_bottom(16.)
             .finish(),
     );
@@ -167,6 +228,34 @@ pub(super) fn render_body(
     }
 
     body.finish()
+}
+
+fn render_bookmark_editor(
+    editor: &ViewHandle<EditorView>,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
+    let theme = appearance.theme();
+    let label = Text::new(
+        "Bookmark",
+        appearance.ui_font_family(),
+        appearance.ui_font_size(),
+    )
+    .with_color(theme.main_text_color(theme.surface_1()).into_solid())
+    .finish();
+    let input = appearance
+        .ui_builder()
+        .text_input(editor.clone())
+        .with_style(UiComponentStyles {
+            border_color: Some(theme.surface_3().into()),
+            border_radius: Some(CornerRadius::with_all(Radius::Pixels(6.))),
+            ..Default::default()
+        })
+        .build()
+        .finish();
+    Flex::column()
+        .with_child(Container::new(label).with_margin_bottom(8.).finish())
+        .with_child(input)
+        .finish()
 }
 
 fn render_commits_section(state: &PushState, appearance: &Appearance) -> Box<dyn Element> {

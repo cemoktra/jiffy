@@ -28,9 +28,9 @@ use super::kitty::{
 };
 use super::terminal_model::BlockIndex;
 use super::{ObfuscateSecrets, TerminalModel};
-use crate::ai::blocklist::SerializedBlockListItem;
 use crate::terminal::color::{self, Colors};
 use crate::terminal::event_listener::ChannelEventListener;
+use crate::terminal::model::block::SerializedBlock;
 use crate::terminal::{BlockPadding, SizeInfo};
 
 pub fn block_size() -> BlockSize {
@@ -113,7 +113,7 @@ fn block_padding() -> BlockPadding {
 /// prompt:
 ///
 /// ```no_run
-/// # use warp::terminal::model::test_utils::TestBlockListBuilder;
+/// # use jiffy::terminal::model::test_utils::TestBlockListBuilder;
 /// let block_list = TestBlockListBuilder::new()
 ///     .with_honor_ps1(true)
 ///     .build();
@@ -125,17 +125,17 @@ fn block_padding() -> BlockPadding {
 /// the channel event proxy:
 ///
 /// ```no_run
-/// # use warp::terminal::event::{BlockType, Event};
-/// # use warp::terminal::event_listener::ChannelEventListener;
-/// # use warp::terminal::model::block::SerializedBlock;
-/// # use warp::terminal::model::test_utils::TestBlockListBuilder;
+/// # use jiffy::terminal::event::{BlockType, Event};
+/// # use jiffy::terminal::event_listener::ChannelEventListener;
+/// # use jiffy::terminal::model::block::SerializedBlock;
+/// # use jiffy::terminal::model::test_utils::TestBlockListBuilder;
 ///
 /// let (events_tx, events_rx) = async_channel::unbounded();
 /// let channel_event_proxy = ChannelEventListener::builder_for_test()
 ///     .with_terminal_events_tx(events_tx)
 ///     .build();
 ///
-/// // `.into()` produces the `SerializedBlockListItem` that `with_restored_blocks`
+/// // `.into()` produces the `SerializedBlock` that `with_restored_blocks`
 /// // expects; its type lives in a private module so it can't be named directly.
 /// let block = SerializedBlock::new_for_test("test".into(), "test".into()).into();
 ///
@@ -151,7 +151,7 @@ fn block_padding() -> BlockPadding {
 /// assert!(matches!(data.block_type, BlockType::Restored));
 /// ```
 pub struct TestBlockListBuilder<'a> {
-    restored_blocks: Option<&'a [SerializedBlockListItem]>,
+    restored_blocks: Option<&'a [SerializedBlock]>,
     honor_ps1: bool,
     block_sizes: BlockSize,
     channel_event_proxy: ChannelEventListener,
@@ -167,7 +167,7 @@ impl<'a> TestBlockListBuilder<'a> {
         }
     }
 
-    pub fn with_restored_blocks(mut self, restored_blocks: &'a [SerializedBlockListItem]) -> Self {
+    pub fn with_restored_blocks(mut self, restored_blocks: &'a [SerializedBlock]) -> Self {
         self.restored_blocks = Some(restored_blocks);
         self
     }
@@ -199,12 +199,11 @@ impl<'a> TestBlockListBuilder<'a> {
             self.honor_ps1,
             false, /* is_inverted */
             ObfuscateSecrets::No,
-            false, /* is_telemetry_enabled */
         );
         // This is usually done by the terminal manager after constructing the blocklist,
         // but we have tests assuming the separator exists.
         if self.restored_blocks.is_some() {
-            block_list.append_session_restoration_separator_to_block_list(false);
+            block_list.append_session_restoration_separator_to_block_list();
         }
         block_list
     }
@@ -221,7 +220,7 @@ impl Default for TestBlockListBuilder<'_> {
 /// For example, to create a [`Block`] that respects the user's custom prompt:
 ///
 /// ```no_run
-/// # use warp::terminal::model::test_utils::TestBlockBuilder;
+/// # use jiffy::terminal::model::test_utils::TestBlockBuilder;
 /// let block = TestBlockBuilder::new()
 ///     .with_honor_ps1(true)
 ///     .build();
@@ -284,8 +283,6 @@ impl TestBlockBuilder {
             self.block_index,
             self.honor_ps1,
             ObfuscateSecrets::No,
-            false, /* is_telemetry_enabled */
-            None,
         )
     }
 }
@@ -321,7 +318,7 @@ impl TerminalModel {
     /// See [`TerminalModel::new_for_test`] for a more configurable
     /// test constructor.
     pub fn mock(
-        restored_blocks: Option<&[SerializedBlockListItem]>,
+        restored_blocks: Option<&[SerializedBlock]>,
         event_proxy: Option<ChannelEventListener>,
     ) -> TerminalModel {
         TerminalModel::new_for_test(

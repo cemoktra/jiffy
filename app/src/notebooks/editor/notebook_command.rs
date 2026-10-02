@@ -1,7 +1,6 @@
 use std::borrow::Cow;
 use std::mem;
 use std::ops::Range;
-use std::sync::Arc;
 
 use async_channel::Sender;
 use itertools::Itertools;
@@ -43,18 +42,16 @@ use warpui::{
 use super::interaction_state_model::InteractionStateModel;
 use super::keys::{NotebookKeybindings, custom_action_to_display};
 use super::model::ChildModelHandle;
+use super::rich_text_styles;
 use super::view::EditorViewAction;
-use super::{NotebookWorkflow, rich_text_styles};
 use crate::ASSETS;
 use crate::appearance::Appearance;
 use crate::completer::SessionAgnosticContext;
-use crate::drive::workflows::arguments::ArgumentsState;
 use crate::editor::InteractionState;
 use crate::features::FeatureFlag;
 use crate::menu::MenuItemFields;
 use crate::notebooks::file::MarkdownDisplayMode;
 use crate::notebooks::styles::block_footer_action_button;
-use crate::notebooks::telemetry::{ActionEntrypoint, BlockInfo};
 use crate::settings::FontSettings;
 use crate::terminal::input::DEBOUNCE_INPUT_DECORATION_PERIOD;
 use crate::terminal::input::decorations::{
@@ -67,8 +64,6 @@ use crate::util::bindings::CustomAction;
 use crate::util::color::{ContrastingColor, MinimumAllowedContrast};
 use crate::view_components::Dropdown;
 use crate::view_components::dropdown::DropdownAction;
-use crate::workflows::WorkflowType;
-use crate::workflows::workflow::Workflow;
 use crate::workspace::WorkspaceAction;
 
 lazy_static! {
@@ -304,11 +299,6 @@ impl NotebookCommand {
     pub(crate) fn is_rendered_mermaid(&self, ctx: &AppContext) -> bool {
         matches!(self.code_block_type(ctx), CodeBlockType::Mermaid)
             && matches!(self.mermaid_display_mode, MarkdownDisplayMode::Rendered)
-    }
-
-    #[cfg(feature = "integration_tests")]
-    pub(crate) fn is_shell_command(&self, ctx: &AppContext) -> bool {
-        matches!(self.code_block_type(ctx), CodeBlockType::Shell)
     }
 
     #[cfg(test)]
@@ -605,19 +595,6 @@ impl NotebookCommand {
     pub fn set_selected(&mut self, selected: bool) -> bool {
         mem::replace(&mut self.is_selected, selected)
     }
-
-    /// Promotes this notebook command into a [`Workflow`]. If the workflow is anonymous, the
-    /// containing `NotebookView` fills in its title.
-    pub fn to_workflow(&self, ctx: &AppContext) -> Option<NotebookWorkflow> {
-        let command = self.command(ctx)?;
-        let args_state = ArgumentsState::for_command_workflow(&Default::default(), command.clone());
-        // TODO: Once notebook workflows have their own metadata, we can populate the title here.
-        let workflow = Workflow::new(String::new(), command).with_arguments(args_state.arguments);
-        Some(NotebookWorkflow {
-            workflow: UserInput::new(Arc::new(WorkflowType::Notebook(workflow))),
-            source: None,
-        })
-    }
 }
 
 impl Entity for NotebookCommand {
@@ -794,8 +771,6 @@ impl RunnableCommandModel for NotebookCommand {
                     {
                         ctx.dispatch_typed_action(EditorViewAction::CopyTextToClipboard {
                             text: UserInput::new(block_content.trim()),
-                            block: BlockInfo::CodeBlock,
-                            entrypoint: ActionEntrypoint::Button,
                         });
                     }
                 })
@@ -817,9 +792,11 @@ impl RunnableCommandModel for NotebookCommand {
                     )
                     .on_click(move |ctx, app, _| {
                         if let Some(command_model) = model.upgrade(app)
-                            && let Some(workflow) = command_model.as_ref(app).to_workflow(app)
+                            && let Some(command) = command_model.as_ref(app).command(app)
                         {
-                            ctx.dispatch_typed_action(EditorViewAction::RunWorkflow(workflow));
+                            ctx.dispatch_typed_action(EditorViewAction::RunCommand(
+                                UserInput::new(command),
+                            ));
                         }
                     })
                     .finish(),
@@ -856,10 +833,6 @@ impl ChildModelHandle for ModelHandle<NotebookCommand> {
 
     fn selectable(&self, _: &AppContext) -> bool {
         true
-    }
-
-    fn executable_workflow(&self, app: &AppContext) -> Option<NotebookWorkflow> {
-        self.as_ref(app).to_workflow(app)
     }
 
     fn executable_command<'a>(&'a self, app: &'a AppContext) -> Option<Cow<'a, str>> {

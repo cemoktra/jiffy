@@ -45,7 +45,7 @@ static SOLE_INSTANCE_MUTEX: LazyLock<Mutex<Result<Option<MutexHandle>, Error>>> 
     LazyLock::new(|| Mutex::new(try_create_mutex()));
 
 pub(super) fn uri_named_pipe_name() -> String {
-    format!("Warp{:?}_URI_CHANNEL", ChannelState::channel())
+    format!("Jiffy{:?}_URI_CHANNEL", ChannelState::channel())
 }
 
 fn try_create_mutex() -> Result<Option<MutexHandle>, Error> {

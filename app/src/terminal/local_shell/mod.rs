@@ -76,13 +76,6 @@ pub enum LocalShellStateEvent {}
 /// which asynchronously collects information about the user's default
 /// shell/corresponding path environment variable. It's useful in
 /// executing commands locally without having to initiate a session.
-///
-/// Its usage pattern can be seen in app/src/external_secrets/mod.rs,
-/// where the shell_path is fetched from a caller view (in this case,
-/// fetch_secrets in app/src/env_vars/env_var_collection.rs) via a
-/// LocalShell handle, and is passed into the external secret manager
-/// interface. The interface then dispatches commands to execute via
-/// execute_command in this file.
 #[cfg(feature = "local_tty")]
 impl LocalShellState {
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
@@ -359,3 +352,26 @@ impl SingletonEntity for LocalShellState {}
 #[cfg(all(test, feature = "local_tty"))]
 #[path = "mod_tests.rs"]
 mod tests;
+
+/// Resolves `command` using the PATH captured from the user's interactive login shell, matching how
+/// MCP servers and LSP find binaries. Falls back to the process's `PATH` if the capture fails.
+#[cfg(feature = "local_tty")]
+pub fn resolve_executable_from_user_shell(
+    command: &'static str,
+    ctx: &mut warpui::AppContext,
+) -> BoxFuture<'static, Option<PathBuf>> {
+    use crate::util::path::{resolve_executable, resolve_executable_in_path};
+
+    let path_future = LocalShellState::handle(ctx).update(ctx, |shell_state, ctx| {
+        shell_state.get_interactive_path_env_var(ctx)
+    });
+    async move {
+        let path_env_var = path_future.await;
+        let resolved = match path_env_var.as_deref() {
+            Some(path) => resolve_executable_in_path(command, std::ffi::OsStr::new(path)),
+            None => resolve_executable(command),
+        };
+        resolved.map(|p| p.into_owned())
+    }
+    .boxed()
+}

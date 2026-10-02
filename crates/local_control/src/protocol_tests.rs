@@ -26,11 +26,11 @@ fn strict_params_serialize_without_synthetic_discriminators() {
     let action = Action::with_params(
         ActionKind::TabCreate,
         TabCreateParams {
-            tab_type: Some(TabType::Agent),
+            tab_type: Some(TabType::Default),
         },
     )
     .expect("tab.create params serialize");
-    assert_eq!(action.params, serde_json::json!({ "tab_type": "agent" }));
+    assert_eq!(action.params, serde_json::json!({ "tab_type": "default" }));
     assert!(action.params.get("type").is_none());
     assert!(action.params.get("shell").is_none());
 
@@ -157,14 +157,20 @@ fn malformed_and_removed_action_names_are_not_deserialized() {
         "drive.object.insert",
         "drive.object.share_to_team",
         "drive.workflow.run",
+        "surface.warp_drive.open",
+        "surface.warp_drive.toggle",
+        "surface.resource_center.toggle",
+        "surface.ai_assistant.toggle",
+        "surface.conversation_list.open",
+        "surface.agent_management.open",
     ] {
         assert!(serde_json::from_value::<ActionKind>(serde_json::json!(action)).is_err());
     }
 }
 
 #[test]
-fn catalog_has_exactly_84_retained_actions() {
-    assert_eq!(ActionKind::ALL.len(), 84);
+fn catalog_has_exactly_78_retained_actions() {
+    assert_eq!(ActionKind::ALL.len(), 78);
 }
 
 #[test]
@@ -191,16 +197,8 @@ fn direct_surface_actions_have_stable_names() {
         "surface.global_search.open"
     );
     assert_eq!(
-        ActionKind::SurfaceConversationListOpen.as_str(),
-        "surface.conversation_list.open"
-    );
-    assert_eq!(
         ActionKind::SurfaceVerticalTabsOpen.as_str(),
         "surface.vertical_tabs.open"
-    );
-    assert_eq!(
-        ActionKind::SurfaceAgentManagementOpen.as_str(),
-        "surface.agent_management.open"
     );
 }
 

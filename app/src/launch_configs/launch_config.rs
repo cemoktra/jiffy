@@ -181,10 +181,6 @@ pub enum PaneMode {
     /// A standard terminal shell session.
     #[default]
     Terminal,
-    /// A terminal that immediately enters Agent Mode.
-    Agent,
-    /// A cloud-mode (ambient agent) pane with no local shell.
-    Cloud,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
@@ -244,22 +240,9 @@ impl TryFrom<PaneNodeSnapshot> for PaneTemplateType {
                 }),
                 // Currently, notebook panes cannot be saved in launch configurations.
                 LeafContents::Notebook(_)
-                | LeafContents::EnvVarCollection(_)
                 | LeafContents::Code(_)
-                | LeafContents::Workflow(_)
                 | LeafContents::Settings(_)
-                | LeafContents::AIFact(_)
-                | LeafContents::CodeReview(_)
-                | LeafContents::CustomRouterEditor
-                | LeafContents::ExecutionProfileEditor
-                | LeafContents::GetStarted
-                | LeafContents::NetworkLog
-                | LeafContents::AIDocument(_)
-                | LeafContents::EnvironmentManagement(_)
-                | LeafContents::AmbientAgent(_) => {
-                    // TODO: Handle AIDocument in launch config
-                    Err(())
-                }
+                | LeafContents::CodeReview(_) => Err(()),
             },
         }
     }

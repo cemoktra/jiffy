@@ -16,7 +16,7 @@ impl InputBufferModel {
             // This is intended to be the set of Editor view events that exhaustively
             // capture any changes to editor contents or cursor position.
             editor::Event::Edited(..)
-            | editor::Event::CtrlC { .. }
+            | editor::Event::CtrlC
             | editor::Event::BufferReinitialized
             | editor::Event::SelectionChanged
             | editor::Event::BufferReplaced => {

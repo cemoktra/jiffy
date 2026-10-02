@@ -18,9 +18,9 @@ fn test_keybinding_name_to_display_string() {
                 )
                 .with_key_binding("cmd-,"),
                 EditableBinding::new(
-                    "workspace:toggle_resource_center",
-                    "Toggle Resource Center",
-                    WorkspaceAction::ToggleResourceCenter,
+                    "workspace:toggle_keybindings_page",
+                    "Toggle Keybindings Page",
+                    WorkspaceAction::ToggleKeybindingsPage,
                 ),
             ]);
 
@@ -36,7 +36,7 @@ fn test_keybinding_name_to_display_string() {
 
             assert_eq!(
                 None,
-                keybinding_name_to_display_string("workspace:toggle_resource_center", ctx)
+                keybinding_name_to_display_string("workspace:toggle_keybindings_page", ctx)
             );
 
             ctx.set_custom_trigger(
@@ -55,7 +55,7 @@ fn test_keybinding_name_to_display_string() {
             );
 
             ctx.set_custom_trigger(
-                "workspace:toggle_resource_center".to_owned(),
+                "workspace:toggle_keybindings_page".to_owned(),
                 Trigger::Keystrokes(vec![Keystroke::parse("cmd-alt-/").unwrap()]),
             );
 
@@ -66,30 +66,9 @@ fn test_keybinding_name_to_display_string() {
             };
             assert_eq!(
                 Some(expected_keybinding),
-                keybinding_name_to_display_string("workspace:toggle_resource_center", ctx)
+                keybinding_name_to_display_string("workspace:toggle_keybindings_page", ctx)
                     .as_deref()
             );
-        });
-    });
-}
-
-#[test]
-fn test_orchestration_cycle_bindings_are_editable() {
-    App::test((), |mut app| async move {
-        app.update(terminal::init);
-
-        app.update(|ctx| {
-            let next = ctx
-                .editable_bindings()
-                .find(|binding| binding.name == "terminal:cycle_next_orchestration_child_agent")
-                .and_then(|binding| trigger_to_keystroke(binding.trigger));
-            let previous = ctx
-                .editable_bindings()
-                .find(|binding| binding.name == "terminal:cycle_previous_orchestration_child_agent")
-                .and_then(|binding| trigger_to_keystroke(binding.trigger));
-
-            assert_eq!(next, Keystroke::parse("ctrl-alt-]").ok());
-            assert_eq!(previous, Keystroke::parse("ctrl-alt-[").ok());
         });
     });
 }

@@ -59,7 +59,7 @@ fn test_command_at_cursor_has_common_package_installer_prefix_with_alias_expansi
     use crate::terminal::model::session::command_executor::testing::TestCommandExecutor;
     use crate::terminal::model::session::{Session, SessionInfo};
 
-    App::test((), |app| async move {
+    App::test((), |_| async move {
         // Alias 'ya' expands to 'yarn add'
         let aliases = HashMap::from_iter([("ya".into(), "yarn add".to_string())]);
         let session = Session::new(
@@ -73,8 +73,7 @@ fn test_command_at_cursor_has_common_package_installer_prefix_with_alias_expansi
         #[cfg(windows)]
         let cwd = TypedPathBuf::from_windows("C:\\");
 
-        let session_ctx = app
-            .read(|ctx| SessionContext::new(session, CommandRegistry::default().into(), cwd, ctx));
+        let session_ctx = SessionContext::new(session, CommandRegistry::default().into(), cwd);
 
         let buffer = "ya @".to_string();
         let at_index = buffer.rfind('@').unwrap();

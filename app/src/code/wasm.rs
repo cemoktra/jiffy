@@ -1,6 +1,5 @@
 use std::path::{Path, PathBuf};
 
-use ai::diff_validation::DiffDelta;
 use warp_util::path::LineAndColumnArg;
 use warpui::elements::{DraggableState, Empty, MouseStateHandle};
 use warpui::{
@@ -10,6 +9,7 @@ use warpui::{
 use super::buffer_location::LocalOrRemotePath;
 use super::editor_management::CodeSource;
 use super::local_code_editor::LocalCodeEditorView;
+use crate::code::diff_delta::DiffDelta;
 use crate::pane_group::focus_state::PaneFocusHandle;
 use crate::pane_group::pane::view::{HeaderContent, HeaderRenderContext};
 use crate::pane_group::{BackingView, CodePane, PaneConfiguration, PaneEvent};
@@ -46,9 +46,6 @@ pub enum CodeViewEvent {
     FileOpened {
         location: LocalOrRemotePath,
         tab_index: usize,
-    },
-    RunTabConfigSkill {
-        path: PathBuf,
     },
     OpenLspLogs {
         log_path: PathBuf,
@@ -242,11 +239,7 @@ impl BackingView for CodeView {
     ) {
     }
 
-    fn render_header_content(
-        &self,
-        _ctx: &HeaderRenderContext<'_>,
-        app: &AppContext,
-    ) -> HeaderContent {
+    fn render_header_content(&self, _ctx: &HeaderRenderContext, app: &AppContext) -> HeaderContent {
         HeaderContent::simple(self.pane_configuration.as_ref(app).title())
     }
 

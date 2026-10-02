@@ -1,12 +1,8 @@
-use std::cell::RefCell;
-use std::collections::HashMap;
 use std::fmt::Display;
 
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use regex::Regex;
 use settings::{Setting, ToggleableSetting};
-use strum::IntoEnumIterator;
-use warp_core::features::FeatureFlag;
 use warp_errors::report_if_error;
 use warpui::elements::{
     Container, Flex, FormattedTextElement, HighlightedHyperlink, MouseStateHandle, ParentElement,
@@ -21,22 +17,15 @@ use warpui::{
 };
 
 use super::settings_page::{
-    Category, CategoryHeader, HEADER_FONT_SIZE, HEADER_PADDING, LocalOnlyIconState, MatchData,
-    PageType, SettingsPageEvent, SettingsPageMeta, SettingsPageViewHandle, SettingsWidget,
-    ToggleState, add_setting, render_alternating_color_list, render_body_item,
-    render_dropdown_item, render_page_title,
+    Category, CategoryHeader, HEADER_FONT_SIZE, MatchData, PageType, SettingsPageEvent,
+    SettingsPageMeta, SettingsPageViewHandle, SettingsWidget, ToggleState, add_setting,
+    render_alternating_color_list, render_body_item, render_page_title,
 };
 use super::{SettingsAction, SettingsSection, ToggleSettingActionPair, flags};
 use crate::appearance::Appearance;
-use crate::send_telemetry_from_ctx;
-use crate::server::telemetry::TelemetryEvent;
-use crate::settings::{ReuseExistingSshControlMaster, SshSettings};
-use crate::terminal::warpify::settings::{
-    EnableSshWarpification, SshExtensionInstallMode, SshExtensionInstallModeSetting,
-    WarpifySettings, WarpifySettingsChangedEvent,
-};
+use crate::settings::SshSettings;
+use crate::terminal::warpify::settings::WarpifySettings;
 use crate::ui_components::blended_colors;
-use crate::view_components::dropdown::{Dropdown, DropdownItem};
 use crate::view_components::{SubmittableTextInput, SubmittableTextInputEvent};
 
 pub fn init_actions_from_parent_view<T: Action + Clone>(
@@ -69,9 +58,7 @@ const ITEM_VERTICAL_SPACING: f32 = 24.;
 const BUILT_IN_TEXT_INPUT_MARGIN: f32 = 10.;
 const SPACE_AFTER_TEXT_INPUT: f32 = ITEM_VERTICAL_SPACING - BUILT_IN_TEXT_INPUT_MARGIN;
 
-const SSH_REUSE_CONTROL_MASTER_DESCRIPTION: &str = "Attach to a live SSH ControlMaster you already have configured for the destination host instead of creating a Warp-owned one. Takes effect in new tabs.";
-
-const SSH_EXTENSION_INSTALL_MODE_DESCRIPTION: &str = "Controls the installation behavior for Warp's SSH extension when a remote host doesn't have it installed.";
+const SSH_REUSE_CONTROL_MASTER_DESCRIPTION: &str = "Attach to a live SSH ControlMaster you already have configured for the destination host instead of creating a Jiffy-owned one. Takes effect in new tabs.";
 
 /// This page lets users configure when they get asked to warpify a session. Some shell commands
 /// are recognized by default. Users can add new shell commands, or prevent the default ones from
@@ -86,8 +73,6 @@ pub struct WarpifyPageView {
     /// This needs to mirror the length of SubshellSettings::denylisted_remove_button_states.
     remove_denylisted_command_button_states: Vec<MouseStateHandle>,
     add_denylisted_commands_editor: ViewHandle<SubmittableTextInput>,
-
-    ssh_extension_install_mode_dropdown: ViewHandle<Dropdown<WarpifyPageAction>>,
 }
 
 impl WarpifyPageView {
@@ -95,14 +80,8 @@ impl WarpifyPageView {
         let warpify_settings_handle = WarpifySettings::handle(ctx);
 
         ctx.observe(&warpify_settings_handle, Self::update_button_states);
-        ctx.subscribe_to_model(&warpify_settings_handle, move |me, model, event, ctx| {
+        ctx.subscribe_to_model(&warpify_settings_handle, move |me, model, _, ctx| {
             me.update_button_states(model, ctx);
-            if matches!(
-                event,
-                WarpifySettingsChangedEvent::SshExtensionInstallModeSetting { .. }
-            ) {
-                me.update_dropdown(ctx);
-            }
             ctx.notify();
         });
 
@@ -131,16 +110,12 @@ impl WarpifyPageView {
             Self::handle_denylisted_command_editor_event,
         );
 
-        let ssh_extension_install_mode_dropdown =
-            Self::create_ssh_extension_install_mode_dropdown(ctx);
-
         let mut instance = Self {
             page: Self::build_page(ctx),
             remove_added_command_button_states: Default::default(),
             add_added_commands_editor,
             remove_denylisted_command_button_states: Default::default(),
             add_denylisted_commands_editor,
-            ssh_extension_install_mode_dropdown,
         };
 
         instance.update_button_states(warpify_settings_handle, ctx);
@@ -191,22 +166,6 @@ impl WarpifyPageView {
         ctx.notify();
     }
 
-    /// Syncs the install-mode dropdown selection with the current
-    /// `WarpifySettings::ssh_extension_install_mode` value (e.g. after it
-    /// was changed from the SSH remote server choice view).
-    fn update_dropdown(&mut self, ctx: &mut ViewContext<Self>) {
-        let current_mode = *WarpifySettings::as_ref(ctx)
-            .ssh_extension_install_mode
-            .value();
-        self.ssh_extension_install_mode_dropdown
-            .update(ctx, |dropdown, ctx| {
-                dropdown.set_selected_by_action(
-                    WarpifyPageAction::SetSshExtensionInstallMode(current_mode),
-                    ctx,
-                );
-            });
-    }
-
     fn handle_added_command_editor_event(
         &mut self,
         _handle: ViewHandle<SubmittableTextInput>,
@@ -218,8 +177,6 @@ impl WarpifyPageView {
                 WarpifySettings::handle(ctx).update(ctx, |warpify_settings, ctx| {
                     warpify_settings.add_subshell_command(new_command, ctx);
                 });
-
-                send_telemetry_from_ctx!(TelemetryEvent::AddAddedSubshellCommand, ctx);
             }
             SubmittableTextInputEvent::Escape => ctx.emit(SettingsPageEvent::FocusModal),
         }
@@ -236,22 +193,18 @@ impl WarpifyPageView {
                 WarpifySettings::handle(ctx).update(ctx, |warpify_settings, ctx| {
                     warpify_settings.denylist_subshell_command(new_command, ctx);
                 });
-
-                send_telemetry_from_ctx!(TelemetryEvent::AddDenylistedSubshellCommand, ctx);
             }
             SubmittableTextInputEvent::Escape => ctx.emit(SettingsPageEvent::FocusModal),
         }
     }
 
     fn remove_denylisted_command(&self, index: usize, ctx: &mut ViewContext<Self>) {
-        send_telemetry_from_ctx!(TelemetryEvent::RemoveDenylistedSubshellCommand, ctx);
         WarpifySettings::handle(ctx).update(ctx, |warpify, ctx| {
             warpify.remove_denylisted_subshell_command(index, ctx)
         });
     }
 
     fn remove_added_command(&self, index: usize, ctx: &mut ViewContext<Self>) {
-        send_telemetry_from_ctx!(TelemetryEvent::RemoveAddedSubshellCommand, ctx);
         WarpifySettings::handle(ctx).update(ctx, |warpify, ctx| {
             warpify.remove_added_subshell_command(index, ctx)
         });
@@ -273,44 +226,7 @@ fn build_sub_sub_title(title: &str, appearance: &Appearance) -> Container {
         .build()
 }
 
-const SSH_EXTENSION_DROPDOWN_WIDTH: f32 = 250.;
-
 impl WarpifyPageView {
-    fn create_ssh_extension_install_mode_dropdown(
-        ctx: &mut ViewContext<Self>,
-    ) -> ViewHandle<Dropdown<WarpifyPageAction>> {
-        let items: Vec<DropdownItem<WarpifyPageAction>> = SshExtensionInstallMode::iter()
-            .map(|mode| {
-                DropdownItem::new(
-                    mode.display_name(),
-                    WarpifyPageAction::SetSshExtensionInstallMode(mode),
-                )
-            })
-            .collect();
-
-        let current_mode = *WarpifySettings::as_ref(ctx)
-            .ssh_extension_install_mode
-            .value();
-        let enable_ssh_warpification = *WarpifySettings::as_ref(ctx)
-            .enable_ssh_warpification
-            .value();
-
-        ctx.add_typed_action_view(move |ctx| {
-            let mut dropdown = Dropdown::new(ctx);
-            dropdown.set_top_bar_max_width(SSH_EXTENSION_DROPDOWN_WIDTH);
-            dropdown.set_menu_width(SSH_EXTENSION_DROPDOWN_WIDTH, ctx);
-            dropdown.add_items(items, ctx);
-            dropdown.set_selected_by_action(
-                WarpifyPageAction::SetSshExtensionInstallMode(current_mode),
-                ctx,
-            );
-            if !enable_ssh_warpification {
-                dropdown.set_disabled(ctx);
-            }
-            dropdown
-        })
-    }
-
     /// Renders a title, a list of items that can be removed, and an input field to add new items.
     fn build_input_list<
         ListItem: Display,
@@ -373,8 +289,6 @@ pub enum WarpifyPageAction {
     /// Toggles whether the legacy SSH wrapper attaches to an existing
     /// ControlMaster for the destination host instead of creating its own.
     ToggleReuseSshControlMaster,
-    /// Set the SSH extension installation mode (always ask / always install / always skip).
-    SetSshExtensionInstallMode(SshExtensionInstallMode),
     OpenUrl(String),
 }
 
@@ -393,24 +307,7 @@ impl TypedActionView for WarpifyPageView {
                             .enable_ssh_warpification
                             .toggle_and_save_value(ctx)
                     );
-                    send_telemetry_from_ctx!(
-                        TelemetryEvent::ToggleSshWarpification {
-                            enabled: *ssh_settings.enable_ssh_warpification.value(),
-                        },
-                        ctx
-                    );
                 });
-                let enabled = *WarpifySettings::as_ref(ctx)
-                    .enable_ssh_warpification
-                    .value();
-                self.ssh_extension_install_mode_dropdown
-                    .update(ctx, |dropdown, ctx| {
-                        if enabled {
-                            dropdown.set_enabled(ctx);
-                        } else {
-                            dropdown.set_disabled(ctx);
-                        }
-                    });
             }
             ToggleReuseSshControlMaster => {
                 SshSettings::handle(ctx).update(ctx, |ssh_settings, ctx| {
@@ -418,31 +315,6 @@ impl TypedActionView for WarpifyPageView {
                         ssh_settings
                             .reuse_existing_control_master
                             .toggle_and_save_value(ctx)
-                    );
-                    send_telemetry_from_ctx!(
-                        TelemetryEvent::FeaturesPageAction {
-                            action: "ToggleSshReuseControlMaster".to_string(),
-                            value: ssh_settings
-                                .reuse_existing_control_master
-                                .value()
-                                .to_string(),
-                        },
-                        ctx
-                    );
-                });
-            }
-            SetSshExtensionInstallMode(mode) => {
-                WarpifySettings::handle(ctx).update(ctx, |warpify_settings, ctx| {
-                    report_if_error!(
-                        warpify_settings
-                            .ssh_extension_install_mode
-                            .set_value(*mode, ctx)
-                    );
-                    send_telemetry_from_ctx!(
-                        TelemetryEvent::SetSshExtensionInstallMode {
-                            mode: mode.display_name(),
-                        },
-                        ctx
                     );
                 });
             }
@@ -605,7 +477,6 @@ impl SettingsWidget for SubshellsWidget {
 struct SSHWidget {
     enable_ssh_warpification_switch_state: SwitchStateHandle,
     reuse_control_master_switch_state: SwitchStateHandle,
-    local_only_icon_tooltip_states: RefCell<HashMap<String, MouseStateHandle>>,
 }
 
 impl SettingsWidget for SSHWidget {
@@ -617,7 +488,7 @@ impl SettingsWidget for SSHWidget {
 
     fn render(
         &self,
-        view: &Self::View,
+        _view: &Self::View,
         appearance: &Appearance,
         app: &AppContext,
     ) -> Box<dyn Element> {
@@ -638,12 +509,6 @@ impl SettingsWidget for SSHWidget {
                 render_body_item::<WarpifyPageAction>(
                     "Warpify SSH Sessions".into(),
                     None,
-                    LocalOnlyIconState::for_setting(
-                        EnableSshWarpification::storage_key(),
-                        EnableSshWarpification::sync_to_cloud(),
-                        &mut self.local_only_icon_tooltip_states.borrow_mut(),
-                        app,
-                    ),
                     ToggleState::Enabled,
                     appearance,
                     ui_builder
@@ -659,36 +524,6 @@ impl SettingsWidget for SSHWidget {
             },
         );
 
-        if FeatureFlag::SshRemoteServer.is_enabled() {
-            let label_color_override = if !enable_ssh_warpification {
-                Some(appearance.theme().disabled_ui_text_color())
-            } else {
-                None
-            };
-            add_setting(
-                &mut column,
-                &WarpifySettings::as_ref(app).ssh_extension_install_mode,
-                move || {
-                    Container::new(render_dropdown_item(
-                        appearance,
-                        "Install SSH extension",
-                        Some(SSH_EXTENSION_INSTALL_MODE_DESCRIPTION),
-                        None,
-                        LocalOnlyIconState::for_setting(
-                            SshExtensionInstallModeSetting::storage_key(),
-                            SshExtensionInstallModeSetting::sync_to_cloud(),
-                            &mut self.local_only_icon_tooltip_states.borrow_mut(),
-                            app,
-                        ),
-                        label_color_override,
-                        &view.ssh_extension_install_mode_dropdown,
-                    ))
-                    .with_padding_bottom(HEADER_PADDING)
-                    .finish()
-                },
-            );
-        }
-
         let reuse_existing_control_master = *SshSettings::as_ref(app)
             .reuse_existing_control_master
             .value();
@@ -700,12 +535,6 @@ impl SettingsWidget for SSHWidget {
                 column.add_child(render_body_item::<WarpifyPageAction>(
                     "Reuse existing SSH ControlMaster".into(),
                     None,
-                    LocalOnlyIconState::for_setting(
-                        ReuseExistingSshControlMaster::storage_key(),
-                        ReuseExistingSshControlMaster::sync_to_cloud(),
-                        &mut self.local_only_icon_tooltip_states.borrow_mut(),
-                        app,
-                    ),
                     enable_ssh_warpification.into(),
                     appearance,
                     ui_builder

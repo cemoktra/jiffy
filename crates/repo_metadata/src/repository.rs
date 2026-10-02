@@ -9,6 +9,8 @@ use std::time::Duration;
 use futures::future::ready;
 #[cfg(feature = "local_fs")]
 use ignore::gitignore::Gitignore;
+#[cfg(feature = "local_fs")]
+use warp_core::features::FeatureFlag;
 use warp_util::standardized_path::StandardizedPath;
 #[cfg(feature = "local_fs")]
 use warpui_core::SingletonEntity;
@@ -80,6 +82,9 @@ pub struct Repository {
     /// have in common. Derived from `external_git_directory` by walking up to
     /// the `.git` component. `None` when the repo is not a linked worktree.
     common_git_directory: Option<StandardizedPath>,
+    /// The jj repository store (`.jj/repo`) when this directory is a jj workspace. For secondary
+    /// workspaces this lives in the main workspace's `.jj/`.
+    jj_repo_directory: Option<StandardizedPath>,
     /// Collection of subscribers interested in file changes.
     subscribers: HashMap<SubscriberId, RepositorySubscription>,
     /// Counter for generating unique subscriber IDs.
@@ -146,10 +151,21 @@ impl Repository {
             .as_ref()
             .and_then(Self::derive_common_git_directory);
 
+        #[cfg(feature = "local_fs")]
+        let jj_repo_directory = FeatureFlag::JjSupport
+            .is_enabled()
+            .then(|| root_dir.to_local_path())
+            .flatten()
+            .and_then(|root| resolve_jj_repo_dir(&root))
+            .and_then(|dir| StandardizedPath::from_local_canonicalized(&dir).ok());
+        #[cfg(not(feature = "local_fs"))]
+        let jj_repo_directory = None;
+
         Self {
             root_dir,
             external_git_directory,
             common_git_directory,
+            jj_repo_directory,
             subscribers: HashMap::new(),
             next_subscriber_id: 0,
             #[cfg(feature = "local_fs")]
@@ -226,6 +242,24 @@ impl Repository {
                 ctx.spawn(registration_future, |_, _, _| {});
             }
         }
+    }
+
+    /// Whether this directory is a jj workspace (colocated with git or not).
+    pub fn is_jj(&self) -> bool {
+        self.jj_repo_directory.is_some()
+    }
+
+    /// Whether this is a jj workspace added with `jj workspace add`, whose store lives in another
+    /// workspace.
+    pub fn is_secondary_jj_workspace(&self) -> bool {
+        self.jj_repo_directory
+            .as_ref()
+            .is_some_and(|jj_repo_dir| !jj_repo_dir.starts_with(&self.root_dir))
+    }
+
+    /// The jj repository store (`.jj/repo`), if this is a jj workspace.
+    pub fn jj_repo_dir(&self) -> Option<&StandardizedPath> {
+        self.jj_repo_directory.as_ref()
     }
 
     /// Returns the path to the actual `.git` directory for this repository.
@@ -363,6 +397,16 @@ impl Repository {
             if let Ok(config_std) = StandardizedPath::from_local_canonicalized(&config_file) {
                 paths.push(config_std);
             }
+        }
+        // A secondary jj workspace shares the main workspace's operation log, which lives outside
+        // this root and so isn't covered by the root watch.
+        if let Some(jj_repo_dir) = &self.jj_repo_directory
+            && !jj_repo_dir.starts_with(&self.root_dir)
+            && let Some(jj_local) = jj_repo_dir.to_local_path()
+            && let Ok(op_heads) =
+                StandardizedPath::from_local_canonicalized(&jj_local.join("op_heads").join("heads"))
+        {
+            paths.push(op_heads);
         }
         paths
     }
@@ -752,6 +796,25 @@ where
             handle.abort();
         }
     }
+}
+
+/// Resolves the jj repository store for a workspace root. `.jj/repo` is a directory in the main
+/// workspace and a file holding a path (relative to `.jj/`) in secondary workspaces.
+#[cfg(feature = "local_fs")]
+pub(crate) fn resolve_jj_repo_dir(root: &Path) -> Option<PathBuf> {
+    let jj_dir = root.join(".jj");
+    let repo_path = jj_dir.join("repo");
+    let metadata = std::fs::metadata(&repo_path).ok()?;
+    if metadata.is_dir() {
+        return Some(repo_path);
+    }
+    let target = PathBuf::from(std::fs::read_to_string(&repo_path).ok()?.trim());
+    let resolved = if target.is_absolute() {
+        target
+    } else {
+        jj_dir.join(target)
+    };
+    resolved.is_dir().then_some(resolved)
 }
 
 #[cfg(test)]

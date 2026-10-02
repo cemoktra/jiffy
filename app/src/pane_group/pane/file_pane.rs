@@ -3,18 +3,15 @@ use std::sync::Arc;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::{AppContext, ModelHandle, View, ViewContext, ViewHandle};
 
-use super::notebook_pane::subscribe_to_link_model;
+use super::super::Direction;
 use super::view::PaneView;
-use super::{
-    DetachType, PaneConfiguration, PaneContent, PaneGroup, PaneId, ShareableLink,
-    ShareableLinkError,
-};
+use super::{DetachType, PaneConfiguration, PaneContent, PaneGroup, PaneId};
 use crate::app_state::{LeafContents, NotebookPaneSnapshot};
 #[cfg(feature = "local_fs")]
 use crate::code::editor_management::CodeSource;
 use crate::notebooks::file::{FileNotebookEvent, FileNotebookView};
+use crate::notebooks::link::{LinkEvent, NotebookLinks};
 use crate::terminal::model::session::Session;
-use crate::workflows::WorkflowSelectionSource;
 
 pub struct FilePane {
     view: ViewHandle<PaneView<FileNotebookView>>,
@@ -84,13 +81,8 @@ impl PaneContent for FilePane {
         ctx.subscribe_to_view(
             &self.file_view(ctx),
             move |pane_group, _, event, ctx| match event {
-                FileNotebookEvent::RunWorkflow { workflow, source } => {
-                    ctx.emit(crate::pane_group::Event::RunWorkflow {
-                        workflow: workflow.clone(),
-                        workflow_source: *source,
-                        workflow_selection_source: WorkflowSelectionSource::Notebook,
-                        argument_override: None,
-                    });
+                FileNotebookEvent::RunCommand(command) => {
+                    ctx.emit(crate::pane_group::Event::RunCommand(command.clone()));
                 }
                 FileNotebookEvent::TitleUpdated => {
                     ctx.emit(crate::pane_group::Event::PaneTitleUpdated)
@@ -159,13 +151,6 @@ impl PaneContent for FilePane {
         self.file_view(ctx).update(ctx, |view, ctx| view.focus(ctx));
     }
 
-    fn shareable_link(
-        &self,
-        _ctx: &mut ViewContext<PaneGroup>,
-    ) -> Result<ShareableLink, ShareableLinkError> {
-        Ok(ShareableLink::Base)
-    }
-
     fn pane_configuration(&self) -> ModelHandle<PaneConfiguration> {
         self.pane_configuration.clone()
     }
@@ -173,4 +158,42 @@ impl PaneContent for FilePane {
     fn is_pane_being_dragged(&self, ctx: &AppContext) -> bool {
         self.view.as_ref(ctx).is_being_dragged()
     }
+}
+
+fn subscribe_to_link_model(
+    pane_id: PaneId,
+    handle: &ModelHandle<NotebookLinks>,
+    ctx: &mut ViewContext<PaneGroup>,
+) {
+    ctx.subscribe_to_model(handle, move |pane_group, _, event, ctx| match event {
+        LinkEvent::OpenFileNotebook { path, session } => {
+            // Opening local files is delegated to the parent workspace.
+            ctx.emit(crate::pane_group::Event::OpenFileInWarp {
+                path: LocalOrRemotePath::Local(path.clone()),
+                session: session.clone(),
+            })
+        }
+        LinkEvent::StartLocalSession { path } => {
+            pane_group.add_session_in_directory(
+                Direction::Right,
+                Some(pane_id),
+                None, /* chosen_shell */
+                Some(path.clone()),
+                ctx,
+            );
+        }
+        #[cfg(feature = "local_fs")]
+        LinkEvent::OpenFileWithTarget {
+            path,
+            target,
+            line_col,
+        } => {
+            ctx.emit(crate::pane_group::Event::OpenFileWithTarget {
+                path: path.clone(),
+                target: target.clone(),
+                line_col: *line_col,
+            });
+        }
+        LinkEvent::RefreshLinks => (),
+    });
 }

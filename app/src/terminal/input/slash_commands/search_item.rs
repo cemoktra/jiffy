@@ -6,12 +6,12 @@ use warpui::fonts::{Properties, Weight};
 use warpui::prelude::{ConstrainedBox, Container, CrossAxisAlignment, Empty, Flex, Text};
 use warpui::{AppContext, Element, SingletonEntity};
 
-use super::{AcceptSlashCommandOrSavedPrompt, InlineItem};
-use crate::ai::blocklist::agent_view::shortcuts::render_keystroke_with_color_overrides;
+use super::{AcceptSlashCommandOrSkill, InlineItem};
 use crate::search::item::SearchItemDetail;
 use crate::search::slash_command_menu::static_commands::commands::COMMAND_REGISTRY;
 use crate::search::{ItemHighlightState, SearchItem};
 use crate::terminal::input::inline_menu::styles as inline_styles;
+use crate::ui_components::keystroke::render_keystroke_with_color_overrides;
 use crate::util::bindings::keybinding_name_to_keystroke;
 
 fn inline_width_for_name_column(app: &AppContext) -> f32 {
@@ -32,7 +32,7 @@ fn inline_width_for_name_column(app: &AppContext) -> f32 {
 }
 
 impl SearchItem for InlineItem {
-    type Action = AcceptSlashCommandOrSavedPrompt;
+    type Action = AcceptSlashCommandOrSkill;
 
     fn render_icon(
         &self,
@@ -83,17 +83,15 @@ impl SearchItem for InlineItem {
         }
 
         let keystroke = if highlight_state.is_selected()
-            && matches!(
-                &self.action,
-                AcceptSlashCommandOrSavedPrompt::SlashCommand { .. }
-            ) {
+            && matches!(&self.action, AcceptSlashCommandOrSkill::SlashCommand { .. })
+        {
             keybinding_name_to_keystroke(&self.name, app)
         } else {
             None
         };
 
         let name_element = if let Some(keystroke) = keystroke {
-            let mut row = Flex::row()
+            Flex::row()
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
                 .with_child(name_text.finish())
                 .with_child(
@@ -114,23 +112,17 @@ impl SearchItem for InlineItem {
                     ))
                     .with_margin_left(4.)
                     .finish(),
-                );
-            if !self.compact_layout {
-                row = row.with_child(Shrinkable::new(1., Empty::new().finish()).finish());
-            }
-            row.finish()
+                )
+                .with_child(Shrinkable::new(1., Empty::new().finish()).finish())
+                .finish()
         } else {
             name_text.finish()
         };
 
         row.add_child(if self.description.is_some() {
-            if self.compact_layout {
-                Container::new(name_element).with_margin_right(8.).finish()
-            } else {
-                ConstrainedBox::new(name_element)
-                    .with_width(inline_width_for_name_column(app))
-                    .finish()
-            }
+            ConstrainedBox::new(name_element)
+                .with_width(inline_width_for_name_column(app))
+                .finish()
         } else {
             name_element
         });

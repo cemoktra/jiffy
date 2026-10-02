@@ -20,6 +20,7 @@ cfg_if::cfg_if! {
         use watcher::{BulkFilesystemWatcher, BulkFilesystemWatcherEvent};
         use crate::entry::{
             extract_worktree_git_dir, is_commit_related_git_file, is_git_internal_path,
+            is_jj_internal_path, is_jj_op_heads_file,
             is_common_git_config, is_index_lock_file, is_remote_tracking_ref,
             is_shared_git_ref, is_tracking_state_git_file,
         };
@@ -524,6 +525,35 @@ impl DirectoryWatcher {
         }
     }
 
+    /// Marks every jj workspace sharing the operation log that `path` belongs to as updated. Other
+    /// paths inside `.jj/` are jj-internal and dropped.
+    #[cfg(feature = "local_fs")]
+    fn record_jj_internal_path_update(
+        &self,
+        path: &Path,
+        repo_updates: &mut HashMap<ModelHandle<Repository>, RepositoryUpdate>,
+        ctx: &ModelContext<Self>,
+    ) {
+        if !is_jj_op_heads_file(path) {
+            return;
+        }
+        let standardized = StandardizedPath::from_local_absolute_unchecked(path);
+        for repo_handle in self.directories.values() {
+            let is_affected = repo_handle.read(ctx, |repository, _| {
+                repository.has_git_repository_subscribers()
+                    && repository
+                        .jj_repo_dir()
+                        .is_some_and(|jj_repo_dir| standardized.starts_with(jj_repo_dir))
+            });
+            if is_affected {
+                repo_updates
+                    .entry(repo_handle.clone())
+                    .or_default()
+                    .commit_updated = true;
+            }
+        }
+    }
+
     /// Handles filesystem watcher events.
     #[cfg(feature = "local_fs")]
     fn handle_watcher_event(
@@ -542,6 +572,10 @@ impl DirectoryWatcher {
                 |paths: &HashSet<PathBuf>,
                  insert: &mut dyn FnMut(&mut RepositoryUpdate, TargetFile)| {
                     for path in paths {
+                        if is_jj_internal_path(path) {
+                            self.record_jj_internal_path_update(path, &mut repo_updates, ctx);
+                            continue;
+                        }
                         // Check if this is a .git/ internal event (e.g. HEAD, index, refs update).
                         if is_git_internal_path(path) {
                             self.record_git_internal_path_update(
@@ -585,6 +619,10 @@ impl DirectoryWatcher {
 
         // Process deleted files
         for path in &event.deleted {
+            if is_jj_internal_path(path) {
+                self.record_jj_internal_path_update(path, &mut repo_updates, ctx);
+                continue;
+            }
             // Check if this is a .git/ internal event.
             if is_git_internal_path(path) {
                 self.record_git_internal_path_update(
@@ -611,6 +649,11 @@ impl DirectoryWatcher {
 
         // Process moved files
         for (to_path, from_path) in &event.moved {
+            if is_jj_internal_path(to_path) || is_jj_internal_path(from_path) {
+                self.record_jj_internal_path_update(to_path, &mut repo_updates, ctx);
+                self.record_jj_internal_path_update(from_path, &mut repo_updates, ctx);
+                continue;
+            }
             // Check if this is a .git/ internal event.
             if is_git_internal_path(to_path) || is_git_internal_path(from_path) {
                 if is_git_internal_path(to_path) {

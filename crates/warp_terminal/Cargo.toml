@@ -17,13 +17,10 @@ bitflags-serde-legacy.workspace = true
 bounded-vec-deque.workspace = true
 byte-unit = "5.1.4"
 cfg-if.workspace = true
-channel_versions.workspace = true
 command.workspace = true
 command-corrections.workspace = true
 enum-iterator.workspace = true
 flate2 = "1.0.17"
-futures.workspace = true
-futures-lite.workspace = true
 get-size.workspace = true
 hex.workspace = true
 image.workspace = true
@@ -43,12 +40,9 @@ regex.workspace = true
 regex-automata.workspace = true
 regex_dfas.workspace = true
 secret_redaction.workspace = true
-sentry = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
-session-sharing-protocol.workspace = true
 shellexpand.workspace = true
-smallvec.workspace = true
 smol_str.workspace = true
 string-offset.workspace = true
 static_assertions.workspace = true
@@ -66,12 +60,10 @@ warp_completer.workspace = true
 warp_assets.workspace = true
 warp_core.workspace = true
 warp_errors.workspace = true
-warp_isolation_platform.workspace = true
 warp_util.workspace = true
 warpui_core.workspace = true
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
-async-io.workspace = true
 gethostname = "1.1.0"
 mio = { version = "1.1.1", features = ["os-poll", "os-ext"] }
 
@@ -115,19 +107,15 @@ windows-result.workspace = true
 winreg.workspace = true
 
 [dev-dependencies]
-serial_test = "0.8.0"
-tempfile.workspace = true
 unicode-segmentation = "1.11.0"
 warp_core = { workspace = true, features = ["test-util"] }
 
 [features]
-crash_reporting = ["dep:sentry", "warp_errors/crash_reporting"]
 integration_tests = [
     "warp_core/integration_tests",
     "warpui_core/integration_tests",
 ]
 local_fs = ["warp_core/local_fs"]
 local_tty = []
-remote_tty = []
 test-util = ["warp_core/test-util", "warpui_core/test-util"]
 tui = ["warpui_core/tui"]

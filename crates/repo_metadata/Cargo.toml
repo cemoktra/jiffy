@@ -16,17 +16,13 @@ test-util = []
 [dependencies]
 anyhow.workspace = true
 dunce.workspace = true
-serde.workspace = true
-serde_json.workspace = true
 thiserror.workspace = true
-walkdir.workspace = true
 itertools.workspace = true
 warpui_core.workspace = true
 warp_core.workspace = true
 warp_errors.workspace = true
 warp_util.workspace = true
 ignore = "0.4.23"
-once_cell.workspace = true
 log.workspace = true
 futures.workspace = true
 async-fs.workspace = true
@@ -34,8 +30,6 @@ tempfile.workspace = true
 cfg-if = "1.0"
 dirs.workspace = true
 futures-lite.workspace = true
-strum_macros.workspace = true
-strum.workspace = true
 parking_lot.workspace = true
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
@@ -49,4 +43,5 @@ anyhow.workspace = true
 env_logger.workspace = true
 futures = "0.3"
 virtual-fs.workspace = true
+warp_core = { workspace = true, features = ["test-util"] }
 warpui = { workspace = true, features = ["test-util"] }

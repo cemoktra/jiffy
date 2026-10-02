@@ -481,3 +481,29 @@ fn unchanged_tracked_remote_ref_does_not_notify_subscribers() {
         },
     );
 }
+
+#[test]
+fn resolve_jj_repo_dir_handles_main_and_secondary_workspaces() {
+    use std::fs;
+
+    use super::resolve_jj_repo_dir;
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let main = temp_dir.path().join("main");
+    let secondary = temp_dir.path().join("secondary");
+    let plain = temp_dir.path().join("plain");
+    fs::create_dir_all(main.join(".jj").join("repo")).unwrap();
+    fs::create_dir_all(secondary.join(".jj")).unwrap();
+    fs::create_dir_all(&plain).unwrap();
+    fs::write(secondary.join(".jj").join("repo"), "../../main/.jj/repo").unwrap();
+
+    assert_eq!(
+        resolve_jj_repo_dir(&main),
+        Some(main.join(".jj").join("repo"))
+    );
+    assert_eq!(
+        resolve_jj_repo_dir(&secondary).map(|dir| dir.canonicalize().unwrap()),
+        Some(main.join(".jj").join("repo").canonicalize().unwrap())
+    );
+    assert_eq!(resolve_jj_repo_dir(&plain), None);
+}

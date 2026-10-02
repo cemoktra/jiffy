@@ -9,19 +9,13 @@ use warp_core::channel::ChannelState;
 use warpui::windowing;
 
 pub(crate) fn run() -> anyhow::Result<()> {
-    println!("Warp version: {:?}", ChannelState::app_version());
+    println!("Jiffy version: {:?}", ChannelState::app_version());
 
     #[cfg(not(windows))]
     {
         let uname = collect_output_or_suggest_install("uname -a");
         println!("uname(1) output: {}", uname.trim_end());
     }
-
-    #[cfg(target_os = "linux")]
-    println!(
-        "Package type: {:?}",
-        crate::autoupdate::linux::UpdateMethod::detect()
-    );
 
     #[cfg_attr(windows, expect(unused_mut))]
     #[cfg_attr(any(target_os = "macos", target_family = "wasm"), expect(unused))]

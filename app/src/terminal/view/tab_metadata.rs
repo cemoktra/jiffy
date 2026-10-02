@@ -34,12 +34,10 @@ impl TerminalView {
     }
 
     pub fn current_git_branch(&self, ctx: &AppContext) -> Option<String> {
-        self.prompt_chip_value(&ContextChipKind::ShellGitBranch, ctx)
-            .or_else(|| {
-                self.git_status_metadata(ctx)
-                    .map(|metadata| metadata.current_branch_name.clone())
-                    .filter(|branch| !branch.trim().is_empty())
-            })
+        self.git_status_metadata(ctx)
+            .map(|metadata| metadata.current_branch_name.clone())
+            .filter(|branch| !branch.trim().is_empty())
+            .or_else(|| self.prompt_chip_value(&ContextChipKind::ShellGitBranch, ctx))
     }
 
     pub fn last_completed_command_text(&self) -> Option<String> {
@@ -83,15 +81,13 @@ impl TerminalView {
         // Prefer the externally-updated GitRepoStatusModel (local filesystem
         // watcher or remote daemon push receiver) over parsing the raw shell
         // chip output. This matches the preference order used by the prompt
-        // chip display (display.rs) and agent footer (chips.rs).
+        // chip display (display.rs) and CLI agent footer (chips.rs).
         let from_model = self
             .git_status_metadata(ctx)
             .map(|metadata| GitLineChanges::from_diff_stats(&metadata.stats_against_head));
 
         from_model
-            .or_else(|| {
-                git_line_changes_from_chips(&self.current_prompt.as_ref(ctx).agent_view_chips(ctx))
-            })
+            .or_else(|| git_line_changes_from_chips(&self.current_prompt.as_ref(ctx).chips(ctx)))
             .filter(|line_changes| {
                 line_changes.files_changed > 0
                     || line_changes.lines_added > 0

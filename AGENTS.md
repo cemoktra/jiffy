@@ -2,41 +2,34 @@
 
 This file provides guidance when working with code in this repository.
 
+Jiffy is a local-only terminal forked from the Warp client: no account, cloud sync, Warp AI agent,
+session sharing, autoupdate, crash reporting, or telemetry. It adds Jujutsu (jj) support and
+integration with third-party CLI agents such as Claude Code. Jiffy targets Linux; macOS and Windows
+code paths are kept but not actively maintained, and wasm is not a supported target.
+
 ## Development Commands
 
 ### Build and Run
-- `cargo run` / `./script/run` - Build and run the GUI desktop app locally
-- `./script/run-tui` - Build and run the headless TUI front-end (`crates/warp_tui`)
-- `cargo bundle --bin warp` - Bundle the main (GUI) app
+- `./script/run` - Build and run the app locally (the `jiffy` binary with the `gui` feature)
+- `cargo run -p jiffy --bin jiffy --features gui` - Same, without the wrapper script
+- `./script/bundle` - Build a release bundle (AppImage/deb/rpm/arch packages on Linux)
 
-### Running with local warp-server
-To connect Warp client to a local warp-server instance:
+On Linux, `.cargo/config.toml` links with `clang` and `mold`; both must be on `PATH`
+(`./script/bootstrap` installs them on Debian-based distributions).
 
-```bash
-# Connect to server on default port 8080
-WITH_LOCAL_SERVER=1 ./script/run
-
-# Connect to server on custom port (e.g., 8082)
-WITH_LOCAL_SERVER=1 SERVER_ROOT_URL=http://localhost:8082 WS_SERVER_URL=ws://localhost:8082/graphql/v2 ./script/run
-```
-
-Environment variables:
-- `SERVER_ROOT_URL` - HTTP endpoint (default: `http://localhost:8080`)
-- `WS_SERVER_URL` - WebSocket endpoint (default: `ws://localhost:8080/graphql/v2`)
+Logs are written to `~/.local/state/jiffy/jiffy.log`.
 
 ### Testing
 - `cargo nextest run --no-fail-fast --workspace` - Run tests with nextest
+- `cargo nextest run -p <package>` - Run tests for an individual package (the app crate is `jiffy`)
 - `cargo test --doc` - Run doc tests
-- `cargo nextest run -p <package>` - Run tests for an individual package
 
 ### Linting and Formatting
 - `./script/presubmit` - Run the full local presubmit only when explicitly requested
 - `./script/format` - Format code
 - `cargo clippy -p <package> --all-targets --tests -- -D warnings` - Run targeted Clippy
 - `./script/run-clang-format.py -r --extensions 'c,h,cpp,m' ./crates/warpui/src/ ./app/src/` - Check C/C++/Obj-C formatting
-- `./script/run-clang-format.py -i -r --extensions 'c,h,cpp,m' ./crates/warpui/src/ ./app/src/` - Format C/C++/Obj-C code in place
 - `find . -name "*.wgsl" -exec wgslfmt --check {} +` - Check WGSL shader formatting
-- `find . -name "*.wgsl" -exec wgslfmt {} +` - Format WGSL shaders in place
 
 ### Implementation Validation Order
 Optimize for fast delivery and let CI catch uncommon failures outside targeted local coverage.
@@ -47,82 +40,55 @@ Optimize for fast delivery and let CI catch uncommon failures outside targeted l
 4. Run every applicable mutating formatter once, after all other code changes are complete.
 5. Open or update the PR without rerunning tests or lint after formatting and without adding a full `./script/presubmit` run.
 
-Run the full presubmit only when the user, task, or approved spec explicitly requires it. For agent-driven implementation, this section replaces the broader pre-push presubmit guidance in `CONTRIBUTING.md`; that document still describes the human contributor workflow. A later source, test, manifest, generated-code, or configuration change creates a new candidate: rerun the affected portion of the sequence and finish with the applicable formatter. Local commits are checkpoints rather than validation boundaries and do not each need to pass independently. PR text, comments, labels, and other metadata do not invalidate code validation.
+Run the full presubmit only when the user, task, or approved spec explicitly requires it. A later source, test, manifest, generated-code, or configuration change creates a new candidate: rerun the affected portion of the sequence and finish with the applicable formatter.
 
 ### Platform Setup
-- `./script/bootstrap` - Platform-specific setup plus common agent skill installation from `skills-lock.json`; prompts for project/global when an install or update is needed unless a target flag or environment override is provided.
-- `./script/bootstrap --skip-common-skills` - Platform setup without installing or updating common agent skills.
-- `WARP_SKIP_COMMON_SKILLS_INSTALL=1 ./script/run` (or `./script/bootstrap`) - Skip the common-skills install/update check, including its interactive upstream-lock-update prompt, without passing a flag on every invocation.
-- `./script/bootstrap --install-common-skills` - Explicitly install common agent skills from `skills-lock.json`; this is the default behavior.
-- `./script/bootstrap --install-common-skills-in-repo` - Platform setup plus common agent skill installation in this checkout's `.agents/skills`.
-- `./script/bootstrap --install-common-skills-globally` - Platform setup plus common agent skill installation in `~/.agents/skills`.
-- `../common-skills/scripts/install_common_skills --repo-root "$PWD" --project --if-needed` - Install or refresh shared agent skills in this checkout's `.agents/skills`.
-- `../common-skills/scripts/install_common_skills --repo-root "$PWD" --global --if-needed` - Install or refresh shared agent skills in `~/.agents/skills`.
-- `../common-skills/scripts/remove_common_skills --repo-root "$PWD"` - Remove shared agent skills listed in `skills-lock.json` from this checkout's `.agents/skills`.
-- `../common-skills/scripts/remove_common_skills --repo-root "$PWD" --global` - Remove shared agent skills listed in `skills-lock.json` from `~/.agents/skills`.
-- `../common-skills/scripts/remove_common_skills --repo-root "$PWD" --clear-lock` - Remove shared agent skills from this checkout and delete `skills-lock.json`.
+- `./script/bootstrap` - Platform-specific setup (system packages, Rust toolchain, cargo tools)
 - `./script/install_cargo_build_deps` - Install Cargo build dependencies
 - `./script/install_cargo_test_deps` - Install Cargo test dependencies
 
-`skills-lock.json` is the standard project lock file managed by `npx skills`. `warpdotdev/common-skills/scripts/install_common_skills` requires an explicit install target before restoring: pass `--project`, pass `--global`, set `WARP_COMMON_SKILLS_INSTALL_TARGET`, or answer the interactive prompt from bootstrap. Non-interactive flows fail if no target is explicit. The installer creates `skills-lock.json` from `warpdotdev/common-skills` if it is missing, uses global as the recommended interactive default, errors if common skills are present in both project and global locations, prevents a global install pinned to one lock from being silently overwritten by another checkout pinned to a different lock, and verifies installed skills against the lock after successful install or skip paths. `script/run` and `script/bootstrap` execute this installer with `script/resolve_common_skills`, which uses `WARP_COMMON_SKILLS_SCRIPTS_DIR` only when explicitly set and otherwise runs the raw script from `warpdotdev/common-skills`. To test a remote common-skills branch, set `WARP_COMMON_SKILLS_REF=<branch>`. Cloud setup should use `common-skills/scripts/install_common_skills --repo-root <warp-checkout> --project --if-needed --non-interactive` or set `WARP_COMMON_SKILLS_INSTALL_TARGET=project` to avoid the prompt. To update the locked common skills, run `npx --yes skills@1.5.6 update -p -y` and commit the resulting `skills-lock.json` changes.
-
 ## Architecture Overview
 
-This is a Rust-based terminal emulator with a custom UI framework called **WarpUI**. It has **two front-ends** that share a common core.
-
-### Front-ends: GUI and TUI
-
-Warp has two front-ends that share the `warp_core`/`warpui` Entity/model core (App/Entity/`AppContext`, actions, `Appearance`, `FeatureFlag`, telemetry, logging) but differ in UI framework, rendering, input, and verification:
-- **GUI desktop app** — the `app/` crate on the WarpUI pixel/GPU framework (`warpui`, `crates/warpui_core`): `Element`/`View` layout, GPU/WGSL rendering, mouse input, `.app` bundles. Run with `cargo run` / `./script/run`; verify visually with `computer_use` or the real-display integration framework (`crates/integration`).
-- **Headless TUI** — the `crates/warp_tui` crate: a console app (run with `./script/run-tui`; no `.app`/GPU) rendered with a parallel cell-grid element library at `crates/warpui_core/src/elements/tui` (the `TuiElement` trait), behind the `tui` cargo feature. Verify by running it in a real terminal and observing output; test with render-to-lines unit tests.
-
-**Skill convention:** a skill specific to one front-end says so in its name and/or description (e.g. `gui-ui-guidelines` / `gui-integration-test` are GUI-only; `tui-ui-guidelines`, `tui-testing`, and `tui-verify-change` are TUI-specific). Skills with no front-end call-out are surface-agnostic and apply to both. For TUI work prefer the `tui-*` skills and ignore GUI-only ones — and vice versa.
+Jiffy is a Rust terminal emulator built on a custom UI framework called **WarpUI**. The only binary
+is `jiffy` (`app/src/bin/jiffy.rs`), a thin wrapper around `jiffy::run()` in the `app/` crate
+(package and library name `jiffy`).
 
 ### Key Components
 
-**Shared UI core** (`crates/warpui`, `crates/warpui_core`) — used by **both** front-ends:
+**UI framework** (`crates/warpui`, `crates/warpui_core`):
 - Entity-Component-Handle pattern: a global `App` object owns all views/models (entities); views hold `ViewHandle<T>` references to other views; `AppContext` provides temporary access to handles during render/events.
 - Actions system for event handling.
-- `crates/warpui_core` also hosts the TUI cell-grid element library under `src/elements/tui` (behind the `tui` feature).
+- `Element`s describe visual layout (Flutter-inspired) and are rendered on the GPU (WGSL).
+- Mouse input uses `MouseStateHandle`: create it once during construction and reference/clone it wherever mouse input is tracked. An inline `MouseStateHandle::default()` while rendering means no mouse interactions work.
 
-**GUI rendering** (WarpUI GUI elements — GUI-specific):
-- `Element`s describe visual layout (Flutter-inspired), rendered on the GPU (WGSL).
-- Mouse input uses `MouseStateHandle`: create it once during construction and reference/clone it wherever mouse input is tracked. An inline `MouseStateHandle::default()` while rendering means no mouse interactions work. (The TUI's hover/click elements — `TuiHoverable`, `tui_collapsible` — also build on `MouseStateHandle`, so the same ownership rule applies there.)
-
-**TUI rendering** (`crates/warp_tui` + `crates/warpui_core/src/elements/tui` — TUI-specific):
-- Headless console front-end. The `TuiElement` trait lays out and paints into a cell-grid `TuiBuffer`; crossterm input is converted to `TuiEvent`. No GPU/WGSL, pixel geometry, or `.app` bundle.
-
-**Main app / shared surfaces** (`app/`) — the GUI desktop app plus feature surfaces the TUI reuses:
+**Main app** (`app/`):
 - Terminal emulation and shell management (`terminal/`)
-- AI integration including Agent Mode (`ai/`)
-- Cloud synchronization and Drive features (`drive/`)
-- Authentication and user management (`auth/`)
-- Settings and preferences (`settings/`)
-- Workspace and session management (`workspace/`)
+- Third-party CLI agent integration, e.g. Claude Code (`terminal/cli_agent_sessions/`, `agent_notifications/`)
+- Code editor, file tree, and code review panel with git and jj support (`code/`, `code_review/`)
+- Settings and preferences (`settings/`, `settings_view/`)
+- Workspace, tabs, and session management (`workspace/`, `pane_group/`)
 
 **Core Libraries**:
-- `crates/warp_core/` - Core utilities and platform abstractions (shared)
-- `crates/warp_tui/` - Headless TUI front-end
+- `crates/warp_core/` - Core utilities and platform abstractions
+- `crates/warp_terminal/` - Terminal model and grid
 - `crates/editor/` - Text editing functionality
-- `crates/warpui/` and `crates/warpui_core/` - Custom UI framework (shared core plus the GUI and TUI element libraries)
+- `crates/repo_metadata/` - Repository detection and metadata (git and jj)
+- `crates/warp_features/` - Feature flag definitions
+- `crates/persistence/` - SQLite persistence
 - `crates/ipc/` - Inter-process communication
-- `crates/graphql/` - GraphQL client and schema
 
 ### Key Architectural Patterns
 
 1. **Entity-Handle System**: Views reference other views via handles, not direct ownership
-2. **Modular Structure**: Workspace contains multiple workspace configurations, each with terminals, notebooks, etc.
-3. **Cross-Platform**: Native implementations for macOS, Windows, Linux, plus WASM target
-4. **AI Integration**: Built-in AI assistant with context awareness and codebase indexing
-5. **Cloud Sync**: Objects can be synchronized across devices via Warp Drive
+2. **Modular Structure**: A workspace contains tabs, each with a pane group of terminals, editors, etc.
+3. **Cross-Platform**: Linux is the target; macOS and Windows code is conditionally compiled and kept
 
 ### Development Guidelines
 
 **Workspace Structure**:
-- This is a Cargo workspace with 60+ member crates
-- Main binary is in `app/`, UI framework in `crates/warpui/`
+- This is a Cargo workspace; the main crate is `app/` (package `jiffy`) and the UI framework is in `crates/warpui/`
+- Most other crates keep their upstream `warp_*`/`warpui*` names
 - Platform-specific code is conditionally compiled
-- Integration tests are in `crates/integration/`
 
 **Coding Style Preferences**:
 - Avoid unnecessary type annotations, especially in closure params.
@@ -175,14 +141,13 @@ for itself.
   early at a narrower column, so comments span as few lines as possible.
 
 **Terminal Model Locking**:
-- Be extremely careful when calling `model.lock()` on the terminal model (`TerminalModel`). Acquiring multiple locks on the same model from different call sites can cause a deadlock, resulting in a UI freeze (beach ball on macOS).
+- Be extremely careful when calling `model.lock()` on the terminal model (`TerminalModel`). Acquiring multiple locks on the same model from different call sites can cause a deadlock, resulting in a UI freeze.
 - Before adding a new `model.lock()` call, verify that no caller in the current call stack already holds the lock.
 - Prefer passing already-locked model references down the call stack rather than acquiring new locks.
 - If you must lock the model, keep the lock scope as short as possible and avoid calling other functions that might also attempt to lock.
 
 **Testing**:
 - Use `cargo nextest` for parallel test execution
-- Integration tests use the custom framework in `crates/integration/` — this is **GUI-only**. TUI elements/screens are covered by render-to-lines unit tests instead (see the `tui-testing` skill).
 - Follow the Implementation Validation Order above; do not add a full presubmit run after targeted tests unless it was explicitly required.
 - Unit tests should be placed in separate files using the naming convention `${filename}_tests.rs` or `mod_test.rs`
 - Test files should be included at the end of their corresponding module with:
@@ -194,34 +159,23 @@ for itself.
 
 **Pull Request Workflow**:
 - Follow the Implementation Validation Order before opening a PR or pushing a code update. Do not repeat validation when the candidate has not changed.
-- CI is the broad cross-platform and workspace gate. Push once the targeted tests and lint checks pass and the formatter has run; address a later CI failure as a new revision.
-- Do not create public pull requests or public issues that disclose a non-public security vulnerability. Refer users to `SECURITY.md` for the proper disclosure methods instead.
- - When opening PRs, use the PR template at `.github/pull_request_template.md`
- - Add changelog entries when appropriate using the format at the bottom of the PR template. Use the following prefixes (without the `{{}}` brackets):
-   - `CHANGELOG-NEW-FEATURE:` for new, relatively sizable features (use sparingly - these may get marketing/docs)
-   - `CHANGELOG-IMPROVEMENT:` for new functionality of existing features
-   - `CHANGELOG-BUG-FIX:` for fixes related to known bugs or regressions
-   - `CHANGELOG-IMAGE:` for GCP-hosted image URLs
-   - Leave changelog lines blank or remove them if no changelog entry is needed
+- CI (`.github/workflows/ci.yml`) runs Linux tests, formatting, and Clippy; address a later CI failure as a new revision.
+- When opening PRs, use the PR template at `.github/pull_request_template.md`.
 
 **Database**:
 - Uses Diesel ORM with SQLite
 - Migrations in `crates/persistence/migrations/`
 - Schema defined in `crates/persistence/src/schema.rs`
 
-**GraphQL**:
-- Schema and client code generation from `crates/warp_graphql_schema/api/schema.graphql`
-- TypeScript types generated for frontend integration
-
 ### Feature Flags
 
-Warp uses compile-time feature flags with a small runtime plumbing layer.
+Jiffy uses compile-time feature flags with a small runtime plumbing layer.
 
 How to add a feature flag:
-- Add a new variant to `warp_core/src/features.rs` in the `FeatureFlag` enum
-- (Optional) Enable it by default for dogfood builds by listing it in `DOGFOOD_FLAGS`
+- Add a new variant to the `FeatureFlag` enum in `crates/warp_features/src/lib.rs`
+- Enable it by default by adding a matching Cargo feature to `app/Cargo.toml` (and its `default`
+  list) and mapping it in `app/src/features.rs`
 - Gate code paths with `FeatureFlag::YourFlag.is_enabled()`
-- For preview or release rollout, add to `PREVIEW_FLAGS` or `RELEASE_FLAGS` respectively (as appropriate)
 
 Best practices:
 - **Prefer runtime checks over cfg directives**: Prefer `FeatureFlag::YourFlag.is_enabled()` over `#[cfg(...)]` compile-time directives so flags can be toggled without recompilation and are easier to clean up later. Use `#[cfg(...)]` only when the code cannot compile without them (for example, platform-specific code or dependencies that do not exist when the feature is disabled).
@@ -235,11 +189,6 @@ Example:
 pub enum FeatureFlag {
     YourNewFeature,
 }
-
-// Default-on for dogfood builds
-pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
-    FeatureFlag::YourNewFeature,
-];
 
 // Use in code
 if FeatureFlag::YourNewFeature.is_enabled() {

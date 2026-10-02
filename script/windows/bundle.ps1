@@ -16,7 +16,7 @@ Param (
 
     [Alias('release-tag')]
     [String]$RELEASE_TAG = '',
-    [String]$FEATURES = 'release_bundle,crash_reporting,gui',
+    [String]$FEATURES = 'release_bundle,gui',
 
     # Builds only the Warp binary, skips the installer.
     [Switch]$SKIP_BUILD_INSTALLER = $False,
@@ -144,7 +144,6 @@ if ("$CHANNEL" -eq 'local') {
     $WARP_BIN = 'dev'
     $BINARY_NAME = 'dev.exe'
     $APP_NAME = 'WarpDev'
-    $FEATURES = "$FEATURES,agent_mode_debug"
 } elseif ("$CHANNEL" -eq 'preview') {
     $WARP_BIN = 'preview'
     $BINARY_NAME = 'preview.exe'
@@ -155,11 +154,9 @@ if ("$CHANNEL" -eq 'local') {
     $BINARY_NAME = 'warp.exe'
     $APP_NAME = 'Warp'
 } elseif ("$CHANNEL" -eq 'oss') {
-    $WARP_BIN = 'warp-oss'
-    $BINARY_NAME = 'warp-oss.exe'
-    $APP_NAME = 'WarpOss'
-    # The OSS channel does not ship Sentry, so drop the crash_reporting feature
-    # (which would otherwise pull in the Sentry SDK as a dependency).
+    $WARP_BIN = 'jiffy'
+    $BINARY_NAME = 'jiffy.exe'
+    $APP_NAME = 'Jiffy'
     $FEATURES = 'release_bundle,gui'
 }
 
@@ -182,7 +179,7 @@ if ($IS_TUI) {
         'dev' { 'warp-dev' }
         'preview' { 'warp-preview' }
         'stable' { 'warp' }
-        'oss' { 'warp-oss' }
+        'oss' { 'jiffy' }
     }
     $INSTALL_DIR_NAME = switch ($CHANNEL) {
         'local' { 'tui-local' }
@@ -192,22 +189,15 @@ if ($IS_TUI) {
         'oss' { 'tui-oss' }
     }
     $FEATURES = 'release_bundle,standalone,voice_input'
-    if ("$CHANNEL" -ne 'oss') {
-        $FEATURES = "$FEATURES,crash_reporting"
-    }
 } elseif ($IS_CLI) {
     # The CLI ships the same channel binary target as the app (no separate bin), so keep
-    # $WARP_BIN and the channel-scoped $FEATURES set above (crash_reporting, preview_channel,
-    # agent_mode_debug, etc.) but swap the app's `gui` feature for `standalone`, mirroring the
-    # macOS and Linux `--artifact cli` builds. Filtering (rather than overwriting) $FEATURES is
+    # $WARP_BIN and the channel-scoped $FEATURES set above (preview_channel, etc.) but swap the
+    # app's `gui` feature for `standalone`, mirroring the macOS and Linux `--artifact cli` builds. Filtering (rather than overwriting) $FEATURES is
     # required so per-channel additions above -- e.g. preview_channel, required by the `preview`
     # cargo target -- survive into the CLI build.
     $BINARY_NAME = "$WARP_BIN.exe"
     $FEATURES = (($FEATURES -split ',') | Where-Object { $_ -ne 'gui' }) -join ','
     $FEATURES = "$FEATURES,standalone"
-} else {
-    # All app channels ship the v3 classifier and v2 heuristic.
-    $FEATURES = "$FEATURES,nld_classifier_v3,nld_heuristic_v2"
 }
 
 $BINARY_PATH = "$CARGO_TARGET_OUTPUT_DIR\$BINARY_NAME"
@@ -224,7 +214,7 @@ $PDB_BASENAME = if ($IS_TUI) {
     $WARP_BIN
 }
 $PDB_PATH = "$CARGO_TARGET_OUTPUT_DIR\$PDB_BASENAME.pdb"
-$CARGO_PACKAGE = if ($IS_TUI) { 'warp_tui' } else { 'warp' }
+$CARGO_PACKAGE = if ($IS_TUI) { 'warp_tui' } else { 'jiffy' }
 $INSTALLER_SCRIPT = if ($IS_TUI) {
     "$WINDOWS_INSTALLER_DIR\tui-installer.iss"
 } else {

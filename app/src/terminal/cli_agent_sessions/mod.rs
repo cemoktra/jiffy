@@ -7,12 +7,15 @@ use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use event::{CLIAgentEvent, CLIAgentEventSource, CLIAgentEventType};
+use pathfinder_color::ColorU;
+use warp_core::ui::icons::Icon;
+use warp_core::ui::theme::WarpTheme;
+use warp_core::ui::theme::color::internal_colors;
 use warpui::r#async::SpawnedFutureHandle;
 use warpui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
 use self::listener::CLIAgentSessionListener;
 use super::CLIAgent;
-use crate::ai::blocklist::InputConfig;
 
 /// How long to wait, after observing a synthesized Ctrl-C write to a working
 /// CLI agent session's PTY, for further plugin activity before concluding the
@@ -39,16 +42,28 @@ pub enum CLIAgentSessionStatus {
 }
 
 impl CLIAgentSessionStatus {
-    pub fn to_conversation_status(&self) -> crate::ai::agent::conversation::ConversationStatus {
-        use crate::ai::agent::conversation::ConversationStatus;
+    /// The status badge glyph and color for this status.
+    pub fn status_icon_and_color(&self, theme: &WarpTheme) -> (Icon, ColorU) {
         match self {
-            CLIAgentSessionStatus::InProgress => ConversationStatus::InProgress,
-            CLIAgentSessionStatus::Success => ConversationStatus::Success,
-            CLIAgentSessionStatus::Failed { .. } => ConversationStatus::Error,
-            CLIAgentSessionStatus::Blocked { message } => ConversationStatus::Blocked {
-                blocked_action: message.clone().unwrap_or_default(),
-            },
-            CLIAgentSessionStatus::Cancelled => ConversationStatus::Cancelled,
+            CLIAgentSessionStatus::InProgress => (Icon::ClockLoader, theme.ansi_fg_magenta()),
+            CLIAgentSessionStatus::Success => (Icon::Check, theme.ansi_fg_green()),
+            CLIAgentSessionStatus::Failed { .. } => (Icon::Triangle, theme.ansi_fg_red()),
+            CLIAgentSessionStatus::Blocked { .. } => (Icon::StopFilled, theme.ansi_fg_yellow()),
+            CLIAgentSessionStatus::Cancelled => {
+                (Icon::StopFilled, internal_colors::neutral_5(theme))
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for CLIAgentSessionStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CLIAgentSessionStatus::InProgress => write!(f, "In progress"),
+            CLIAgentSessionStatus::Success => write!(f, "Done"),
+            CLIAgentSessionStatus::Failed { .. } => write!(f, "Error"),
+            CLIAgentSessionStatus::Blocked { .. } => write!(f, "Blocked"),
+            CLIAgentSessionStatus::Cancelled => write!(f, "Cancelled"),
         }
     }
 }
@@ -72,41 +87,7 @@ pub enum CLIAgentInputState {
     /// The rich input editor is not open.
     Closed,
     /// The rich input editor is open.
-    Open {
-        /// How this session was opened (for telemetry).
-        entrypoint: CLIAgentInputEntrypoint,
-        /// The input config that was active before opening rich input.
-        previous_input_config: InputConfig,
-        /// Whether the previous lock state was established while the input buffer was empty.
-        previous_was_lock_set_with_empty_buffer: bool,
-    },
-}
-
-/// Why the CLI agent rich input was closed (for telemetry).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
-pub enum CLIAgentRichInputCloseReason {
-    /// User explicitly closed (Escape, Ctrl-G, footer button).
-    Manual,
-    /// Auto-closed due to agent status change (e.g. Blocked).
-    AutoToggle,
-    /// Auto-dismissed after submitting a prompt.
-    Submit,
-    /// Closed for another reason (chip removed, session ended, shared session sync).
-    Other,
-}
-
-/// How a [`CLIAgentInputState`] was opened.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
-pub enum CLIAgentInputEntrypoint {
-    /// User pressed Ctrl-G while a CLI agent was active.
-    CtrlG,
-    /// User clicked the rich input button in the CLI agent footer.
-    FooterButton,
-    /// Automatically opened when the CLI agent resumed work (left a blocked state)
-    /// and the auto-show setting is enabled.
-    AutoShow,
-    /// Rich input was opened to mirror a shared-session participant's state.
-    SharedSessionSync,
+    Open,
 }
 
 impl CLIAgentSessionContext {
@@ -289,8 +270,7 @@ pub enum CLIAgentSessionsModelEvent {
     InputSessionChanged {
         terminal_view_id: EntityId,
         agent: CLIAgent,
-        /// The input state BEFORE this change. When transitioning from
-        /// `Open` → `Closed`, contains the saved input config to restore.
+        /// The input state BEFORE this change.
         previous_input_state: CLIAgentInputState,
         /// The input state AFTER this change.
         new_input_state: CLIAgentInputState,
@@ -387,7 +367,7 @@ impl CLIAgentSessionsModel {
     pub fn is_input_open(&self, terminal_view_id: EntityId) -> bool {
         self.sessions
             .get(&terminal_view_id)
-            .is_some_and(|s| matches!(s.input_state, CLIAgentInputState::Open { .. }))
+            .is_some_and(|s| matches!(s.input_state, CLIAgentInputState::Open))
     }
 
     /// Registers a plugin-backed listener on the session for this terminal.
@@ -683,9 +663,6 @@ impl CLIAgentSessionsModel {
     pub fn open_input(
         &mut self,
         terminal_view_id: EntityId,
-        entrypoint: CLIAgentInputEntrypoint,
-        previous_input_config: InputConfig,
-        previous_was_lock_set_with_empty_buffer: bool,
         should_auto_toggle_input: bool,
         ctx: &mut ModelContext<Self>,
     ) {
@@ -694,11 +671,7 @@ impl CLIAgentSessionsModel {
         };
 
         let previous_input_state = session.input_state;
-        session.input_state = CLIAgentInputState::Open {
-            entrypoint,
-            previous_input_config,
-            previous_was_lock_set_with_empty_buffer,
-        };
+        session.input_state = CLIAgentInputState::Open;
         session.should_auto_toggle_input = should_auto_toggle_input;
 
         ctx.emit(CLIAgentSessionsModelEvent::InputSessionChanged {

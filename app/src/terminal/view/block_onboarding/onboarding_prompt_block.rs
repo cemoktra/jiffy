@@ -13,8 +13,6 @@ use warpui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View
 
 use crate::appearance::Appearance;
 use crate::context_chips::prompt::Prompt;
-use crate::send_telemetry_from_ctx;
-use crate::server::telemetry::{PromptChoice, TelemetryEvent};
 use crate::settings::EnforceMinimumContrast;
 use crate::terminal::SizeInfo;
 use crate::terminal::blockgrid_element::BlockGridElement;
@@ -62,9 +60,9 @@ impl OnboardingPromptBlock {
         let font_color = current_theme.main_text_color(current_theme.background());
 
         // Copy - https://docs.google.com/document/d/1zttBLI5Mw07kUupvrMQoC5aTwTXSHIUOIFFnxZ8GQEU/edit
-        const LINE_ONE: &str = "Next, let’s set up your prompt. Warp has a custom prompt builder or you can select PS1 to honor your pre-existing prompt configuration.";
+        const LINE_ONE: &str = "Next, let’s set up your prompt. Jiffy has a custom prompt builder or you can select PS1 to honor your pre-existing prompt configuration.";
         const LINE_TWO: &str =
-            "Warp works with many custom prompts like oh-my-zsh, Starship, Powerlevel10K. ";
+            "Jiffy works with many custom prompts like oh-my-zsh, Starship, Powerlevel10K. ";
         const LINK_TEXT: &str = "Learn more";
         const LINK_DESTINATION: &str =
             "https://docs.warp.dev/terminal/appearance/prompt#custom-prompt-compatibility-table";
@@ -325,7 +323,7 @@ impl OnboardingPromptBlock {
     fn render_warp_prompt_button_interior(&self, appearance: &Appearance) -> Box<dyn Element> {
         // Pixel values pulled from Figma mocks
         // https://www.figma.com/file/y888viqzWBoMpFTxQqkQEN/Activation?node-id=568:1595&mode=dev
-        const HEADER_TEXT: &str = "Warp prompt";
+        const HEADER_TEXT: &str = "Jiffy prompt";
         const HEADER_MARGIN_LEFT: f32 = 4.;
         const SECTION_MARGIN_TOP: f32 = 8.;
         const OUTER_CORNER_RADIUS: f32 = 4.;
@@ -485,13 +483,6 @@ impl TypedActionView for OnboardingPromptBlock {
                             report_if_error!(prompt.reset(ctx));
                         });
                         ctx.notify();
-                        send_telemetry_from_ctx!(
-                            TelemetryEvent::PromptEdited {
-                                prompt: PromptChoice::Default,
-                                entrypoint: "setup_guide".to_string()
-                            },
-                            ctx
-                        );
                     }
                     OnboardingPromptType::PS1 => {
                         self.selected_prompt = Some(OnboardingPromptType::PS1);
@@ -499,13 +490,6 @@ impl TypedActionView for OnboardingPromptBlock {
                             report_if_error!(settings.honor_ps1.set_value(true, ctx));
                         });
                         ctx.notify();
-                        send_telemetry_from_ctx!(
-                            TelemetryEvent::PromptEdited {
-                                prompt: PromptChoice::PS1,
-                                entrypoint: "setup_guide".to_string()
-                            },
-                            ctx
-                        );
                     }
                 }
             }

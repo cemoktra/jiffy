@@ -111,3 +111,39 @@ fn test_is_plausible_new_branch_name_rejects_internal_whitespace() {
     assert!(!is_plausible_new_branch_name("my branch"));
     assert!(!is_plausible_new_branch_name("foo\tbar"));
 }
+
+#[test]
+fn test_filter_git_branch_on_click_values_parses_jj_output() {
+    let values = [
+        JJ_OUTPUT_MARKER,
+        "main",
+        "feature",
+        WORKTREE_LIST_SEPARATOR,
+        "default\t/repo",
+        "ws1\t/data/worktrees/repo/ws1",
+    ]
+    .map(str::to_string)
+    .to_vec();
+
+    let decoded: Vec<_> = filter_git_branch_on_click_values(Some(values))
+        .unwrap()
+        .iter()
+        .map(|value| GitBranchOnClickValue::decode(value))
+        .collect();
+
+    assert_eq!(
+        decoded,
+        vec![
+            GitBranchOnClickValue::jj_bookmark("main".to_string()),
+            GitBranchOnClickValue::jj_bookmark("feature".to_string()),
+            GitBranchOnClickValue::linked_worktree(
+                "default (workspace)".to_string(),
+                Some("/repo".to_string()),
+            ),
+            GitBranchOnClickValue::linked_worktree(
+                "ws1 (workspace)".to_string(),
+                Some("/data/worktrees/repo/ws1".to_string()),
+            ),
+        ]
+    );
+}

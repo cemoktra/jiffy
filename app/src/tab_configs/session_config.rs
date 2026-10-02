@@ -21,16 +21,15 @@ use crate::ui_components::icons::Icon;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SessionType {
     Terminal,
-    Oz,
     CliAgent(CLIAgent),
 }
 
 impl SessionType {
     /// The CLI command to auto-run for this session type, if any.
-    /// Returns `None` for Terminal and Oz (Oz uses agent view, not a CLI command).
+    /// Returns `None` for Terminal.
     fn command_prefix(&self) -> Option<&'static str> {
         match self {
-            SessionType::Terminal | SessionType::Oz => None,
+            SessionType::Terminal => None,
             SessionType::CliAgent(agent) => Some(agent.command_prefix()),
         }
     }
@@ -39,7 +38,6 @@ impl SessionType {
     pub(crate) fn icon(&self) -> Icon {
         match self {
             SessionType::Terminal => Icon::Terminal,
-            SessionType::Oz => Icon::Agent,
             SessionType::CliAgent(agent) => agent.icon().unwrap_or(Icon::Terminal),
         }
     }
@@ -48,7 +46,6 @@ impl SessionType {
     pub(crate) fn pill_label(&self) -> &'static str {
         match self {
             SessionType::Terminal => "Terminal",
-            SessionType::Oz => "Warp Agent",
             SessionType::CliAgent(CLIAgent::Claude) => "Claude",
             SessionType::CliAgent(CLIAgent::Codex) => "Codex",
             SessionType::CliAgent(CLIAgent::Gemini) => "Gemini",
@@ -142,10 +139,7 @@ pub fn build_tab_config(
         commands.push(prefix.to_string());
     }
 
-    let pane_type = match session_type {
-        SessionType::Oz => TabConfigPaneType::Agent,
-        SessionType::Terminal | SessionType::CliAgent(_) => TabConfigPaneType::Terminal,
-    };
+    let pane_type = TabConfigPaneType::Terminal;
 
     TabConfig {
         name: config_name(directory, enable_worktree),
@@ -183,14 +177,18 @@ pub fn write_tab_config(config: &TabConfig, dir: &Path, base_name: &str) -> Resu
     Ok(path)
 }
 
-/// Returns whether the given directory is inside a git repository.
+/// Returns whether the given directory is inside a git repository or jj workspace.
 ///
-/// Checks for a `.git` directory at the path itself and walks up
+/// Checks for a `.git` directory (or a jj workspace) at the path itself and walks up
 /// parent directories.
 pub fn is_git_repo(path: &Path) -> bool {
     let mut current = path;
     loop {
-        if current.join(".git").is_dir() {
+        #[cfg(feature = "local_fs")]
+        let is_jj_workspace = crate::util::jj::is_jj_workspace(current);
+        #[cfg(not(feature = "local_fs"))]
+        let is_jj_workspace = false;
+        if current.join(".git").is_dir() || is_jj_workspace {
             return true;
         }
         match current.parent() {
@@ -279,15 +277,8 @@ fn snapshot_to_flat_panes(
 
             let (directory, pane_type) = match contents {
                 LeafContents::Terminal(terminal) => {
-                    // If the agent view was open in fullscreen, treat as an Agent pane.
-                    let pane_type = if terminal.active_conversation_id.is_some() {
-                        TabConfigPaneType::Agent
-                    } else {
-                        TabConfigPaneType::Terminal
-                    };
-                    (terminal.cwd.clone(), pane_type)
+                    (terminal.cwd.clone(), TabConfigPaneType::Terminal)
                 }
-                LeafContents::AmbientAgent(_) => (None, TabConfigPaneType::Cloud),
                 // Non-terminal panes become empty terminal panes to preserve layout.
                 _ => (None, TabConfigPaneType::Terminal),
             };

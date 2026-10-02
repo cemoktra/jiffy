@@ -11,17 +11,13 @@ use warpui::windowing::WindowManager;
 use warpui::{AddSingletonModel, App, UpdateModel, UpdateView};
 
 use super::*;
-use crate::auth::AuthStateProvider;
 use crate::editor::EditorView;
 use crate::editor::soft_wrap::FrameLayouts;
 use crate::editor::tests::sample_text;
-use crate::server::server_api::team::MockTeamClient;
-use crate::server::server_api::workspace::MockWorkspaceClient;
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::workspace::ToastStack;
 use crate::workspace::sync_inputs::SyncedInputState;
-use crate::workspaces::user_workspaces::UserWorkspaces;
 
 impl EditorView {
     fn selected_ranges(&self, app: &AppContext) -> Vec<Range<DisplayPoint>> {
@@ -48,20 +44,6 @@ fn initialize_app(app: &mut App) {
     app.add_singleton_model(|_ctx| SyncedInputState::mock());
     app.add_singleton_model(|_ctx| VimRegisters::new());
     app.add_singleton_model(|_| KeybindingChangedNotifier::mock());
-    app.add_singleton_model(|_| AuthStateProvider::new_for_test());
-    #[cfg(feature = "voice_input")]
-    app.add_singleton_model(voice_input::VoiceInput::new);
-
-    let team_client_mock = Arc::new(MockTeamClient::new());
-    let workspace_client_mock = Arc::new(MockWorkspaceClient::new());
-    app.add_singleton_model(|ctx| {
-        UserWorkspaces::mock(
-            team_client_mock.clone(),
-            workspace_client_mock.clone(),
-            vec![],
-            ctx,
-        )
-    });
 }
 
 #[test]
@@ -2053,14 +2035,7 @@ fn test_autosuggestions() -> Result<()> {
         // have "bazz" within its buffer and "foo\nbar" as an autosuggestion.
         let (_, view) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
             let mut view = EditorView::new_with_base_text("bazz", Default::default(), ctx);
-            view.set_autosuggestion(
-                "foo\nbar",
-                AutosuggestionLocation::EndOfBuffer,
-                AutosuggestionType::Command {
-                    was_intelligent_autosuggestion: false,
-                },
-                ctx,
-            );
+            view.set_autosuggestion("foo\nbar", AutosuggestionLocation::EndOfBuffer, ctx);
             view
         });
 
@@ -2150,14 +2125,7 @@ fn test_partial_autosuggestion() -> Result<()> {
         // have "bazz" within its buffer and "foo\nbar" as an autosuggestion.
         let (_, view) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
             let mut view = EditorView::new_with_base_text("bazz", Default::default(), ctx);
-            view.set_autosuggestion(
-                "foo\nbar",
-                AutosuggestionLocation::EndOfBuffer,
-                AutosuggestionType::Command {
-                    was_intelligent_autosuggestion: false,
-                },
-                ctx,
-            );
+            view.set_autosuggestion("foo\nbar", AutosuggestionLocation::EndOfBuffer, ctx);
             view
         });
 
@@ -2185,14 +2153,7 @@ fn test_partial_autosuggestion() -> Result<()> {
         view.update(&mut app, |view, ctx| {
             view.select_all(ctx);
             view.user_insert("test", ctx);
-            view.set_autosuggestion(
-                " {восибing}",
-                AutosuggestionLocation::EndOfBuffer,
-                AutosuggestionType::Command {
-                    was_intelligent_autosuggestion: false,
-                },
-                ctx,
-            );
+            view.set_autosuggestion(" {восибing}", AutosuggestionLocation::EndOfBuffer, ctx);
         });
 
         view.update(&mut app, |view, ctx| {
@@ -2219,9 +2180,6 @@ fn test_partial_autosuggestion() -> Result<()> {
             view.set_autosuggestion(
                 " --files-without-match \"git\" ~/.oh-my-zsh/themes/*",
                 AutosuggestionLocation::EndOfBuffer,
-                AutosuggestionType::Command {
-                    was_intelligent_autosuggestion: false,
-                },
                 ctx,
             );
         });
@@ -2399,14 +2357,7 @@ fn test_placeholder_text() {
 
         // Shows autosuggestion instead if available
         view.update(&mut app, |view, ctx| {
-            view.set_autosuggestion(
-                "single line",
-                AutosuggestionLocation::EndOfBuffer,
-                AutosuggestionType::Command {
-                    was_intelligent_autosuggestion: false,
-                },
-                ctx,
-            );
+            view.set_autosuggestion("single line", AutosuggestionLocation::EndOfBuffer, ctx);
         });
 
         view.read(&app, |view, app| {
@@ -4311,192 +4262,6 @@ fn test_buffer_points_to_cache() {
 }
 
 #[test]
-fn test_paste_clipboard_with_text_only_should_paste_text_normally() {
-    App::test((), |mut app| async move {
-        initialize_app(&mut app);
-
-        let (_, editor) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
-            let mut editor = EditorView::new(Default::default(), ctx);
-            // Enable image context options to allow image attachment functionality
-            // This simulates the state when Agent Mode is active and image attachments are supported
-            editor.image_context_options = ImageContextOptions::Enabled {
-                unsupported_model: false,
-                is_processing_attached_images: false,
-                num_images_attached: 0,
-                num_images_in_conversation: 0,
-            };
-            editor
-        });
-
-        // Text-only clipboard - should paste text normally
-        app.update(|ctx| {
-            let clipboard_content = warpui::clipboard::ClipboardContent {
-                plain_text: "hello world".to_string(),
-                paths: None,
-                html: None,
-                images: None,
-            };
-            ctx.clipboard().write(clipboard_content);
-        });
-
-        editor.update(&mut app, |editor, ctx| {
-            editor.paste(ctx);
-            assert_eq!(editor.buffer_text(ctx), "hello world");
-        });
-
-        // Empty images array should also fall back to text paste
-        app.update(|ctx| {
-            let clipboard_content = warpui::clipboard::ClipboardContent {
-                plain_text: "fallback text".to_string(),
-                paths: None,
-                html: None,
-                images: Some(vec![]), // Empty images array
-            };
-            ctx.clipboard().write(clipboard_content);
-        });
-
-        editor.update(&mut app, |editor, ctx| {
-            editor.clear_buffer(ctx);
-            editor.paste(ctx);
-            // Empty images array should be treated as text-only clipboard content
-            // This tests the fallback behavior when images field exists but is empty
-            assert_eq!(editor.buffer_text(ctx), "fallback text");
-        });
-    })
-}
-
-#[test]
-fn test_paste_clipboard_with_image_only_should_switch_to_agent_mode() {
-    App::test((), |mut app| async move {
-        initialize_app(&mut app);
-
-        let (_, editor) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
-            let mut editor = EditorView::new(Default::default(), ctx);
-            // Enable image context options for testing
-            editor.image_context_options = ImageContextOptions::Enabled {
-                unsupported_model: false,
-                is_processing_attached_images: false,
-                num_images_attached: 0,
-                num_images_in_conversation: 0,
-            };
-            editor
-        });
-
-        // Image-only clipboard - should switch to Agent Mode and attach image
-        app.update(|ctx| {
-            let png_image = warpui::clipboard::ImageData {
-                data: vec![137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13], // PNG header + minimal data
-                mime_type: "image/png".to_string(),
-                filename: None,
-            };
-            let clipboard_content = warpui::clipboard::ClipboardContent {
-                plain_text: "".to_string(), // No text
-                paths: None,
-                html: None,
-                images: Some(vec![png_image]),
-            };
-            ctx.clipboard().write(clipboard_content);
-        });
-
-        editor.update(&mut app, |editor, ctx| {
-            editor.paste(ctx);
-            // Image-only clipboard should not paste any text to the buffer
-            // The image data should be processed separately via Agent Mode switching
-            assert_eq!(editor.buffer_text(ctx), "");
-            // TODO: Add assertions for Agent Mode switch and image attachment
-        });
-    })
-}
-
-#[test]
-fn test_paste_clipboard_with_supported_image_and_text_should_handle_both() {
-    App::test((), |mut app| async move {
-        initialize_app(&mut app);
-
-        let (_, editor) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
-            let mut editor = EditorView::new(Default::default(), ctx);
-            // Enable image context options for testing
-            editor.image_context_options = ImageContextOptions::Enabled {
-                unsupported_model: false,
-                is_processing_attached_images: false,
-                num_images_attached: 0,
-                num_images_in_conversation: 0,
-            };
-            editor
-        });
-
-        // PNG (supported) image and text clipboard - should switch to Agent Mode, attach image, and paste text
-        app.update(|ctx| {
-            let png_image = warpui::clipboard::ImageData {
-                data: vec![137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13], // PNG header + minimal data
-                mime_type: "image/png".to_string(),
-                filename: Some("test.png".to_string()),
-            };
-            let clipboard_content = warpui::clipboard::ClipboardContent {
-                plain_text: "some descriptive text".to_string(),
-                paths: None,
-                html: None,
-                images: Some(vec![png_image]),
-            };
-            ctx.clipboard().write(clipboard_content);
-        });
-
-        editor.update(&mut app, |editor, ctx| {
-            editor.paste(ctx);
-            // When clipboard contains both supported image and text, both should be handled:
-            // - Text content gets pasted to the buffer
-            // - Image triggers Agent Mode switch and attachment process
-            assert_eq!(editor.buffer_text(ctx), "some descriptive text");
-            // TODO: Add assertions for Agent Mode switch and image attachment
-        });
-    })
-}
-
-#[test]
-fn test_paste_clipboard_with_unsupported_image_and_text_should_show_error() {
-    App::test((), |mut app| async move {
-        initialize_app(&mut app);
-
-        let (_, editor) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
-            let mut editor = EditorView::new(Default::default(), ctx);
-            // Enable image context options for testing
-            editor.image_context_options = ImageContextOptions::Enabled {
-                unsupported_model: false,
-                is_processing_attached_images: false,
-                num_images_attached: 0,
-                num_images_in_conversation: 0,
-            };
-            editor
-        });
-
-        // BMP (unsupported) image and text clipboard - should show error and paste text only
-        app.update(|ctx| {
-            let bmp_image = warpui::clipboard::ImageData {
-                data: vec![66, 77, 54, 0, 0, 0, 0, 0, 0, 0, 54, 0, 0, 0], // BMP header + minimal data
-                mime_type: "image/bmp".to_string(),
-                filename: Some("test.bmp".to_string()),
-            };
-            let clipboard_content = warpui::clipboard::ClipboardContent {
-                plain_text: "text with unsupported image".to_string(),
-                paths: None,
-                html: None,
-                images: Some(vec![bmp_image]),
-            };
-            ctx.clipboard().write(clipboard_content);
-        });
-
-        editor.update(&mut app, |editor, ctx| {
-            editor.paste(ctx);
-            // When clipboard contains unsupported image format:
-            // - Text content should still be pasted normally
-            // - Unsupported image should be ignored with appropriate error feedback
-            assert_eq!(editor.buffer_text(ctx), "text with unsupported image");
-            // TODO: Add assertions for error toast being shown
-        });
-    })
-}
-
-#[test]
 fn test_system_delete_basic() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
@@ -4686,3 +4451,49 @@ mod vim_handler_tests;
 
 #[path = "marked_text_tests.rs"]
 mod marked_text_tests;
+
+#[test]
+fn test_paste_clipboard_with_text_only_should_paste_text_normally() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let (_, editor) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            EditorView::new(Default::default(), ctx)
+        });
+
+        // Text-only clipboard - should paste text normally
+        app.update(|ctx| {
+            let clipboard_content = warpui::clipboard::ClipboardContent {
+                plain_text: "hello world".to_string(),
+                paths: None,
+                html: None,
+                images: None,
+            };
+            ctx.clipboard().write(clipboard_content);
+        });
+
+        editor.update(&mut app, |editor, ctx| {
+            editor.paste(ctx);
+            assert_eq!(editor.buffer_text(ctx), "hello world");
+        });
+
+        // Empty images array should also fall back to text paste
+        app.update(|ctx| {
+            let clipboard_content = warpui::clipboard::ClipboardContent {
+                plain_text: "fallback text".to_string(),
+                paths: None,
+                html: None,
+                images: Some(vec![]), // Empty images array
+            };
+            ctx.clipboard().write(clipboard_content);
+        });
+
+        editor.update(&mut app, |editor, ctx| {
+            editor.clear_buffer(ctx);
+            editor.paste(ctx);
+            // Empty images array should be treated as text-only clipboard content
+            // This tests the fallback behavior when images field exists but is empty
+            assert_eq!(editor.buffer_text(ctx), "fallback text");
+        });
+    })
+}

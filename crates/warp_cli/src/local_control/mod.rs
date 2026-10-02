@@ -17,7 +17,7 @@ use commands::{
 use completions::generate_completions_to_stdout;
 use output::write_control_error;
 
-use crate::agent::OutputFormat;
+use crate::output_format::OutputFormat;
 
 /// Hidden flag used by the channel-specific Warp app binary to enter `warpctrl` mode.
 pub const CONTROL_MODE_FLAG: &str = "--warpctrl";
@@ -27,7 +27,7 @@ pub const CONTROL_MODE_FLAG: &str = "--warpctrl";
 #[command(
     name = "warpctrl",
     display_name = "warpctrl",
-    about = "Control a running local Warp app instance"
+    about = "Control a running local Jiffy app instance"
 )]
 pub struct ControlArgs {
     /// Set the output format.
@@ -405,18 +405,6 @@ pub enum SurfaceCommand {
     #[command(subcommand)]
     Keybindings(SurfaceOpenCommand),
 
-    /// Open or toggle Warp Drive.
-    #[command(subcommand)]
-    WarpDrive(SurfaceOpenToggleCommand),
-
-    /// Toggle the resource center.
-    #[command(subcommand)]
-    ResourceCenter(SurfaceToggleCommand),
-
-    /// Toggle the AI assistant.
-    #[command(subcommand)]
-    AiAssistant(SurfaceToggleCommand),
-
     /// Open or toggle code review.
     #[command(subcommand)]
     CodeReview(SurfaceOpenToggleCommand),
@@ -429,10 +417,6 @@ pub enum SurfaceCommand {
     #[command(subcommand)]
     GlobalSearch(SurfaceOpenCommand),
 
-    /// Open the conversation list.
-    #[command(subcommand)]
-    ConversationList(SurfaceOpenCommand),
-
     /// Toggle the left panel.
     #[command(subcommand)]
     LeftPanel(SurfaceToggleCommand),
@@ -444,10 +428,6 @@ pub enum SurfaceCommand {
     /// Open or toggle vertical tabs.
     #[command(subcommand)]
     VerticalTabs(SurfaceOpenToggleCommand),
-
-    /// Open agent management.
-    #[command(subcommand)]
-    AgentManagement(SurfaceOpenCommand),
 }
 
 #[derive(Debug, Clone, Subcommand)]
@@ -811,8 +791,6 @@ pub struct KeybindingGetArgs {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum CliTabType {
     Terminal,
-    Agent,
-    CloudAgent,
     Default,
 }
 
@@ -820,8 +798,6 @@ impl From<CliTabType> for local_control::protocol::TabType {
     fn from(value: CliTabType) -> Self {
         match value {
             CliTabType::Terminal => Self::Terminal,
-            CliTabType::Agent => Self::Agent,
-            CliTabType::CloudAgent => Self::CloudAgent,
             CliTabType::Default => Self::Default,
         }
     }

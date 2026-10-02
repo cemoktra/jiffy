@@ -3,7 +3,6 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use ai::diff_validation::DiffType;
 use warp_core::ui::appearance::Appearance;
 use warp_editor::content::buffer::InitialBufferState;
 use warp_editor::render::model::LineCount;
@@ -14,7 +13,6 @@ use warpui::{
 };
 
 use super::ImmediateSaveError;
-pub use super::diff_viewer::DisplayMode;
 use super::editor::view::CodeEditorView;
 use crate::code::buffer_location::LocalOrRemotePath as BufferFileLocation;
 use crate::code::editor::EditorReviewComment;
@@ -68,13 +66,7 @@ pub struct LocalCodeEditorView {
 }
 
 impl LocalCodeEditorView {
-    pub fn new(
-        editor: ViewHandle<CodeEditorView>,
-        _diff_type: Option<DiffType>,
-        _enable_diff_nav_by_default: bool,
-        _display_mode: Option<DisplayMode>,
-        _ctx: &mut ViewContext<Self>,
-    ) -> Self {
+    pub fn new(editor: ViewHandle<CodeEditorView>, _ctx: &mut ViewContext<Self>) -> Self {
         Self { editor }
     }
 
@@ -100,7 +92,7 @@ impl LocalCodeEditorView {
     pub fn mark_next_save_as_auto_save(&mut self) {}
 
     /// Stub: the WASM editor has no backing file, so nothing can be auto-saved.
-    pub fn can_auto_save(&self, _app: &AppContext) -> bool {
+    pub fn can_auto_save(&self) -> bool {
         false
     }
 

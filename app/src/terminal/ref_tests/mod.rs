@@ -127,14 +127,13 @@ fn ref_test(dir: &Path) {
         color::List::from(&Colors::default()),
         channel_event_proxy,
         Arc::new(Background::default()),
-        false, /* should_show_bootstrap_block */
-        false, /* should_show_in_band_command_blocks */
-        false, /* should_show_memory_stats */
-        false, /* honor_ps1 */
-        false, /* is_inverted */
-        ObfuscateSecrets::No,
-        false, /* is_telemetry_enabled */
-        None,  /* session_startup_path */
+        false,                /* should_show_bootstrap_block */
+        false,                /* should_show_in_band_command_blocks */
+        false,                /* should_show_memory_stats */
+        false,                /* honor_ps1 */
+        false,                /* is_inverted */
+        ObfuscateSecrets::No, /* is_telemetry_enabled */
+        None,                 /* session_startup_path */
         ShellLaunchState::ShellSpawned {
             available_shell: None,
             display_name: ShellName::blank(),

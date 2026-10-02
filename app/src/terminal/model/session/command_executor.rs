@@ -9,8 +9,6 @@ use std::collections::HashMap;
 mod noop_command_executor;
 #[cfg(feature = "local_tty")]
 mod remote_command_executor;
-#[cfg(feature = "local_tty")]
-pub(crate) mod remote_server_executor;
 mod shared;
 
 use std::any::Any;
@@ -102,42 +100,10 @@ pub fn new_command_executor_for_session(
     cfg_if::cfg_if! {
         if #[cfg(feature = "local_tty")] {
             new_command_executor_for_local_tty_session(session_info, executor_command_tx, in_band_command_output_rx, parent_session_info, ctx)
-        } else if  #[cfg(feature = "remote_tty")]{
-            new_command_executor_for_network_backed_pty(executor_command_tx, in_band_command_output_rx, ctx)
         } else {
             Arc::new(NoOpCommandExecutor::default())
         }
     }
-}
-
-/// Constructs a new command executor when there is a network-backed PTY (indicated by the
-/// `remote_tty` feature).
-#[cfg(feature = "remote_tty")]
-#[cfg_attr(feature = "remote_tty", allow(dead_code))]
-fn new_command_executor_for_network_backed_pty(
-    executor_command_tx: &Sender<ExecutorCommandEvent>,
-    in_band_command_output_rx: Receiver<ExecutedExecutorCommandEvent>,
-    ctx: &mut ModelContext<Sessions>,
-) -> Arc<dyn CommandExecutor> {
-    log::info!("creating an in-band command executor!");
-    let (in_band_command_cancelled_tx, in_band_command_cancelled_rx) = async_channel::unbounded();
-    let executor = Arc::new(InBandCommandExecutor::new(
-        executor_command_tx.clone(),
-        in_band_command_cancelled_tx.clone(),
-    ));
-    let executor_clone = executor.clone();
-    ctx.spawn_stream_local(
-        in_band_command_output_rx,
-        move |_, event, _| executor_clone.handle_executed_command_event(event),
-        |_, _| {}, /* on_done */
-    );
-    let executor_clone = executor.clone();
-    ctx.spawn_stream_local(
-        in_band_command_cancelled_rx,
-        move |_, event, _| executor_clone.handle_cancelled_in_band_command_event(event),
-        |_, _| {}, /* on_done */
-    );
-    executor
 }
 
 #[cfg(feature = "local_tty")]
@@ -149,47 +115,16 @@ fn new_command_executor_for_local_tty_session(
     ctx: &mut ModelContext<Sessions>,
 ) -> Arc<dyn CommandExecutor> {
     use msys2_command_executor::MSYS2CommandExecutor;
-    use remote_server_executor::RemoteServerCommandExecutor;
     use settings::Setting as _;
     use warpui::SingletonEntity as _;
     use wsl_command_executor::WslCommandExecutor;
 
     use super::IsSSHWrapperSession;
     use crate::features::FeatureFlag;
-    use crate::remote_server::manager::RemoteServerManager;
     use crate::settings::DebugSettings;
     use crate::terminal::available_shells::AvailableShells;
     use crate::terminal::model::session::{BootstrapSessionType, ShellLaunchData};
     use crate::terminal::shell::ShellType;
-
-    // When the remote server feature flag is enabled and the session is an
-    // SSH wrapper session, use the remote server executor *if* the manager
-    // already has a live `Connected` client for this session.
-    //
-    // By construction this branch is only reached after
-    // `ModelEventDispatcher::complete_bootstrapped_session` has gated on
-    // both `Bootstrapped` and the remote-server setup result
-    // (`RemoteServerReady` / `RemoteServerFailed` / skipped). So
-    // `client_for_session` returning `Some` corresponds to a successful
-    // setup and `None` corresponds to the skip / failure paths, where we
-    // fall through to the existing ControlMaster-based
-    // `RemoteCommandExecutor` below. This preserves the fallback behavior
-    // described in specs/APP-3797.
-    if FeatureFlag::SshRemoteServer.is_enabled()
-        && let IsSSHWrapperSession::Yes { .. } = &session_info.is_ssh_wrapper_session
-    {
-        let session_id = session_info.session_id;
-        let maybe_client = RemoteServerManager::handle(ctx)
-            .read(ctx, |mgr, _| mgr.client_for_session(session_id).cloned());
-        if let Some(client) = maybe_client {
-            log::info!("creating a remote server executor for session {session_id:?}");
-            return Arc::new(RemoteServerCommandExecutor::new(session_id, client));
-        }
-        log::info!(
-            "SshRemoteServer flag on but no connected client for session {session_id:?}; \
-                 falling back to ControlMaster executor"
-        );
-    }
 
     let debug_settings = DebugSettings::as_ref(ctx);
     let are_in_band_generators_for_all_sessions_enabled_debug_setting = debug_settings

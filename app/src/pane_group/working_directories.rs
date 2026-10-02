@@ -9,12 +9,7 @@ use std::path::PathBuf;
 #[cfg(feature = "local_fs")]
 use indexmap::IndexSet;
 #[cfg(feature = "local_fs")]
-use remote_server::manager::RemoteServerManager;
-#[cfg(feature = "local_fs")]
 use repo_metadata::repositories::DetectedRepositories;
-use warp_core::SessionId;
-#[cfg(feature = "local_fs")]
-use warp_errors::report_error;
 #[cfg(feature = "local_fs")]
 use warp_util::remote_path::RemotePath;
 #[cfg(feature = "local_fs")]
@@ -25,16 +20,12 @@ use crate::code::buffer_location::LocalOrRemotePath;
 #[cfg(feature = "local_fs")]
 use crate::code::file_tree::FileTreeView;
 use crate::code_review::code_review_view::CodeReviewView;
-use crate::code_review::comments::{
-    AttachedReviewComment, PendingImportedReviewComment, ReviewCommentBatch,
-};
-use crate::code_review::diff_state::{DiffMode, DiffStateModel};
+use crate::code_review::comments::ReviewCommentBatch;
+use crate::code_review::diff_state::DiffStateModel;
 use crate::workspace::view::global_search::view::GlobalSearchView;
 
 /// Type-safe wrapper around the map of `LocalOrRemotePath` → `DiffStateModel`.
 ///
-/// Enforces that local keys are always paired with local-backend models and
-/// remote keys with remote-backend models via dedicated insertion methods.
 #[cfg(feature = "local_fs")]
 #[derive(Default)]
 struct DiffStateModelMap {
@@ -47,33 +38,8 @@ impl DiffStateModelMap {
         self.models.get(key)
     }
 
-    /// Insert a model that was created from a `LocalOrRemotePath::Local` key.
-    fn insert_local(
-        &mut self,
-        path: PathBuf,
-        model: ModelHandle<DiffStateModel>,
-        ctx: &AppContext,
-    ) {
-        debug_assert!(
-            matches!(model.as_ref(ctx), DiffStateModel::Local(_)),
-            "insert_local called with a remote-backend DiffStateModel",
-        );
+    fn insert(&mut self, path: PathBuf, model: ModelHandle<DiffStateModel>) {
         self.models.insert(LocalOrRemotePath::Local(path), model);
-    }
-
-    /// Insert a model that was created from a `LocalOrRemotePath::Remote` key.
-    fn insert_remote(
-        &mut self,
-        remote_id: RemotePath,
-        model: ModelHandle<DiffStateModel>,
-        ctx: &AppContext,
-    ) {
-        debug_assert!(
-            matches!(model.as_ref(ctx), DiffStateModel::Remote(_)),
-            "insert_remote called with a local-backend DiffStateModel",
-        );
-        self.models
-            .insert(LocalOrRemotePath::Remote(remote_id), model);
     }
 
     fn remove(&mut self, key: &LocalOrRemotePath) -> Option<ModelHandle<DiffStateModel>> {
@@ -376,48 +342,23 @@ impl WorkingDirectoriesModel {
             .and_then(|roots| roots.get(root_path).copied())
     }
 
-    /// Get or create a DiffStateModel for a specific repository.
-    ///
-    /// If the model doesn't exist, it will be created. For remote
-    /// repositories we require a connected session for the host; returns
-    /// `None` when none exists so callers treat the panel as unavailable
-    /// for that repo rather than producing a model that cannot subscribe.
+    /// Get or create a DiffStateModel for a specific repository. Returns `None` for remote
+    /// paths, which have no diff state.
     pub fn get_or_create_diff_state_model(
         &mut self,
         key: LocalOrRemotePath,
-        preferred_session: Option<SessionId>,
         ctx: &mut ModelContext<Self>,
     ) -> Option<ModelHandle<DiffStateModel>> {
         if let Some(model) = self.diff_state_models.get(&key) {
             return Some(model.clone());
         }
 
-        let diff_state_model = match &key {
-            LocalOrRemotePath::Local(path) => {
-                let path = path.clone();
-                ctx.add_model(|ctx| DiffStateModel::new_local(path, ctx))
-            }
-            LocalOrRemotePath::Remote(remote_path) => {
-                let mgr_handle = RemoteServerManager::handle(ctx);
-                mgr_handle
-                    .as_ref(ctx)
-                    .client_for_host(&remote_path.host_id)?;
-                let remote_path = remote_path.clone();
-                ctx.add_model(|ctx| DiffStateModel::new_remote(remote_path, preferred_session, ctx))
-            }
+        let LocalOrRemotePath::Local(path) = key else {
+            return None;
         };
-
-        match key {
-            LocalOrRemotePath::Local(path) => {
-                self.diff_state_models
-                    .insert_local(path, diff_state_model.clone(), ctx);
-            }
-            LocalOrRemotePath::Remote(remote_id) => {
-                self.diff_state_models
-                    .insert_remote(remote_id, diff_state_model.clone(), ctx);
-            }
-        }
-
+        let diff_state_model = ctx.add_model(|ctx| DiffStateModel::new_local(path.clone(), ctx));
+        self.diff_state_models
+            .insert(path, diff_state_model.clone());
         Some(diff_state_model)
     }
 
@@ -935,52 +876,6 @@ impl WorkingDirectoriesModel {
             focused_repo,
         });
     }
-
-    pub(crate) fn insert_code_review_comments(
-        &mut self,
-        pane_group_id: EntityId,
-        repo_path: &LocalOrRemotePath,
-        comments: &Vec<PendingImportedReviewComment>,
-        diff_mode: &DiffMode,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        match self.get_code_review_view(pane_group_id, repo_path) {
-            Some(code_review_view) => code_review_view.update(ctx, |code_review_view, ctx| {
-                code_review_view.set_diff_base(diff_mode.to_owned(), ctx);
-                code_review_view.expand_comment_list(ctx);
-            }),
-            _ => {
-                report_error!(
-                    "WorkingDirectoriesModel did not find CodeReviewView for repo path",
-                    extra: { "repo_path" => ?repo_path }
-                );
-            }
-        }
-
-        if let Some(comment_batch) = self.get_or_create_code_review_comments(repo_path, ctx) {
-            let comments = comments.to_owned();
-            comment_batch.update(ctx, |comment_batch, ctx| {
-                comment_batch.add_pending_imported_comments(comments, diff_mode.to_owned(), ctx);
-            })
-        }
-    }
-
-    /// Inserts pre-flattened (already attached) review comments into the comment batch for the
-    /// given repository, creating the batch if needed. Unlike `insert_code_review_comments`, these
-    /// comments have already been thread-flattened and converted to `AttachedReviewComment`, so
-    /// they are ready to be repositioned onto diff editors immediately.
-    pub(crate) fn upsert_flattened_code_review_comments(
-        &mut self,
-        repo_path: &LocalOrRemotePath,
-        comments: Vec<AttachedReviewComment>,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        if let Some(comment_batch) = self.get_or_create_code_review_comments(repo_path, ctx) {
-            comment_batch.update(ctx, |comment_batch, ctx| {
-                comment_batch.upsert_imported_comments(comments, ctx);
-            });
-        }
-    }
 }
 
 #[cfg(not(feature = "local_fs"))]
@@ -1027,7 +922,6 @@ impl WorkingDirectoriesModel {
     pub fn get_or_create_diff_state_model(
         &mut self,
         _key: LocalOrRemotePath,
-        _preferred_session: Option<SessionId>,
         _ctx: &mut ModelContext<Self>,
     ) -> Option<ModelHandle<DiffStateModel>> {
         None
@@ -1099,24 +993,6 @@ impl WorkingDirectoriesModel {
     }
 
     pub fn remove_pane_group(&mut self, _pane_group_id: EntityId, _ctx: &mut ModelContext<Self>) {}
-
-    pub(crate) fn insert_code_review_comments(
-        &mut self,
-        _pane_group_id: EntityId,
-        _repo_path: &LocalOrRemotePath,
-        _comments: &Vec<PendingImportedReviewComment>,
-        _diff_mode: &DiffMode,
-        _ctx: &mut ModelContext<Self>,
-    ) {
-    }
-
-    pub(crate) fn upsert_flattened_code_review_comments(
-        &mut self,
-        _repo_path: &LocalOrRemotePath,
-        _comments: Vec<AttachedReviewComment>,
-        _ctx: &mut ModelContext<Self>,
-    ) {
-    }
 }
 
 impl Entity for WorkingDirectoriesModel {

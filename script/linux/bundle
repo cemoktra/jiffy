@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Builds a Warp binary and bundles it up for distribution.
+# Builds a Jiffy binary and bundles it up for distribution.
 
 set -e
 
@@ -17,9 +17,8 @@ cleanup() {
 # Run cleanup() when the script terminates (whether it succeeded or failed).
 trap cleanup EXIT
 
-# By default we build dev bundles.
-RELEASE_CHANNEL="dev"
-FEATURES="release_bundle,crash_reporting"
+RELEASE_CHANNEL="oss"
+FEATURES="release_bundle"
 EXTRA_FEATURES=""
 PACKAGES=( appimage )
 BUILD="true"
@@ -85,8 +84,8 @@ while (( "$#" )); do
       ;;
     --artifact)
       if [ -n "$2" ] && [ "${2:0:1}" != "-" ]; then
-        if [[ "$2" != "app" && "$2" != "cli" && "$2" != "warpctrl" && "$2" != "tui" ]]; then
-          echo "Error: --artifact must be 'app', 'cli', 'warpctrl', or 'tui', got '$2'" >&2
+        if [[ "$2" != "app" && "$2" != "cli" && "$2" != "warpctrl" ]]; then
+          echo "Error: --artifact must be 'app', 'cli', or 'warpctrl', got '$2'" >&2
           exit 1
         fi
         ARTIFACT="$2"
@@ -120,10 +119,16 @@ done
 # set positional arguments in their proper place
 eval set -- "$PARAMS"
 
+# Local builds have no release tag, but every package format requires a version.
+if [[ -z "$GIT_RELEASE_TAG" ]]; then
+  GIT_RELEASE_TAG="v$(sed -n 's/^version = "\(.*\)"$/\1/p' "$WORKSPACE_ROOT_DIR/app/Cargo.toml" | head -n 1)"
+  echo "No release tag given; defaulting to $GIT_RELEASE_TAG"
+  export GIT_RELEASE_TAG
+fi
+
 # Linux has no transparent cross-arch execution (unlike macOS's Rosetta), so a
 # binary built for a different architecture than the host can never be run
-# here. Resolve the host architecture once and reuse it both for the TUI
-# native-build restriction below and for deciding whether the just-built
+# here. Resolve the host architecture once to decide whether the just-built
 # binary can stand in for a settings-schema executable further down.
 case "$(uname -m)" in
   arm64|aarch64) HOST_ARCH="aarch64" ;;
@@ -133,15 +138,6 @@ case "$(uname -m)" in
     exit 1
     ;;
 esac
-
-# TUI Linux bundles use the native GNU target because their clipboard backends
-# link against host Wayland/X11 libraries. Refuse to compile on a different
-# architecture so an x86 binary can never be published under an ARM filename
-# (or vice versa). Packaging-only runs may still stage a prebuilt native binary.
-if [[ "$ARTIFACT" == "tui" && "$BUILD" == "true" && "$BUILD_ARCH" != "$HOST_ARCH" ]]; then
-  echo "Error: TUI bundles must be built natively; requested '$BUILD_ARCH' on '$HOST_ARCH'." >&2
-  exit 1
-fi
 
 # Statically compile the CLI and warpctrl artifacts so they can run on older Linux distros.
 if [[ "$ARTIFACT" == "cli" || "$ARTIFACT" == "warpctrl" ]]; then
@@ -163,17 +159,8 @@ DIST_DIR="$CARGO_TARGET_OUTPUT_ROOT/dist"
 
 if [[ $DEBUG = true ]]; then
   CARGO_PROFILE="dev"
-elif [[ $RELEASE_CHANNEL = "local" || $RELEASE_CHANNEL = "dev" ]]; then
-  # For dev bundles, we want to enable debug assertions to
-  # catch violations that would otherwise silently pass in
-  # a normal release build (e.g. in stable).
-  if [[ "$ARTIFACT" == "cli" || "$ARTIFACT" == "warpctrl" || "$ARTIFACT" == "tui" ]]; then
-    CARGO_PROFILE="release-cli-debug_assertions"
-  else
-    CARGO_PROFILE="release-lto-debug_assertions"
-  fi
 else
-  if [[ "$ARTIFACT" == "cli" || "$ARTIFACT" == "warpctrl" || "$ARTIFACT" == "tui" ]]; then
+  if [[ "$ARTIFACT" == "cli" || "$ARTIFACT" == "warpctrl" ]]; then
     CARGO_PROFILE="release-cli"
   else
     CARGO_PROFILE="release-lto"
@@ -185,71 +172,29 @@ if [[ "$CARGO_PROFILE" == "dev" ]]; then
 else
   CARGO_TARGET_OUTPUT_DIR="$CARGO_TARGET_OUTPUT_ROOT/$CARGO_PROFILE"
 fi
-# NOTE: if you change this path, update the "Clean stale bundle output"
-# steps in .github/workflows/create_release.yml so they continue to wipe
-# stale packages left in the shared Namespace runner cache.
 OUT_DIR="$CARGO_TARGET_OUTPUT_DIR/bundle/linux"
 mkdir -p "$OUT_DIR"
 
-# Update parameters based on the target release channel.
+# APP_NAME here must match the value used in Rust as the application name; see
+# app/src/channel.rs.
 #
-# APP_NAME here must match the value used in Rust as the
-# application name; see app/src/channel.rs.
-#
-# WARP_BIN is the name of the binary produced by cargo;
-# BINARY_NAME is the desired name of the binary in the final package.
-if [[ $RELEASE_CHANNEL = "local" ]]; then
-  WARP_BIN="warp"
-  BINARY_NAME="warp-local"
-  APP_NAME="WarpLocal"
-  FEATURES="$FEATURES,agent_mode_debug"
-  export HANDLE_MARKDOWN=1
-elif [[ $RELEASE_CHANNEL = "dev" ]]; then
-  WARP_BIN="dev"
-  BINARY_NAME="warp-dev"
-  APP_NAME="WarpDev"
-  FEATURES="$FEATURES,agent_mode_debug"
-  # Enable heap usage tracking & profiling using jemalloc through pprof.
-  FEATURES="$FEATURES,jemalloc_pprof,heap_usage_tracking"
-  export HANDLE_MARKDOWN=1
-elif [[ $RELEASE_CHANNEL = "preview" ]]; then
-  WARP_BIN="preview"
-  BINARY_NAME="warp-preview"
-  APP_NAME="WarpPreview"
-  FEATURES="$FEATURES,preview_channel"
-  # Enable heap usage tracking & profiling using jemalloc through pprof.
-  FEATURES="$FEATURES,jemalloc_pprof,heap_usage_tracking"
-elif [[ $RELEASE_CHANNEL = "stable" ]]; then
-  WARP_BIN="stable"
-  BINARY_NAME="warp"
-  APP_NAME="Warp"
-elif [[ $RELEASE_CHANNEL = "oss" ]]; then
-  WARP_BIN="warp-oss"
-  BINARY_NAME="warp-oss"
-  APP_NAME="WarpOss"
-  # The OSS channel does not ship Sentry, so drop the crash_reporting feature
-  # (which would otherwise pull in the Sentry SDK as a dependency).
-  FEATURES="release_bundle"
+# WARP_BIN is the name of the binary produced by cargo; BINARY_NAME is the
+# desired name of the binary in the final package.
+if [[ $RELEASE_CHANNEL != "oss" ]]; then
+  echo "Error: Jiffy only ships the 'oss' channel, got '$RELEASE_CHANNEL'" >&2
+  exit 1
 fi
+WARP_BIN="jiffy"
+BINARY_NAME="jiffy"
+APP_NAME="Jiffy"
 
 # Artifact-specific binary naming
 if [[ "$ARTIFACT" == "cli" ]]; then
-  # For CLI artifacts, use oz instead of warp as the binary name.  The OSS
-  # channel is an exception: its CLI command name is `warp-oss`, matching
-  # `Channel::cli_command_name` in the Rust source.
-  if [[ $RELEASE_CHANNEL != "oss" ]]; then
-    BINARY_NAME="${BINARY_NAME/warp/oz}"
-  fi
+  # The CLI command name is `jiffy`, matching `Channel::cli_command_name` in the
+  # Rust source.
+  BINARY_NAME="jiffy"
 elif [[ "$ARTIFACT" == "warpctrl" ]]; then
   BINARY_NAME="warpctrl"
-  PACKAGES=()
-elif [[ "$ARTIFACT" == "tui" ]]; then
-  case "$RELEASE_CHANNEL" in
-    local) WARP_BIN="warp-tui" ;;
-    oss) WARP_BIN="warp-tui-oss" ;;
-    *) WARP_BIN="warp-tui-$RELEASE_CHANNEL" ;;
-  esac
-  BINARY_NAME="$WARP_BIN"
   PACKAGES=()
 fi
 
@@ -259,70 +204,40 @@ if [[ "$ARTIFACT" == "cli" || "$ARTIFACT" == "warpctrl" ]]; then
   if [[ "$ARTIFACT" == "warpctrl" ]]; then
     FEATURES="$FEATURES,warp_control_cli"
   fi
-elif [[ "$ARTIFACT" == "tui" ]]; then
-  # The TUI is a separate console crate with its own per-channel bins and a
-  # minimal feature set. It uses the native GNU target so the Linux clipboard
-  # backends can link against the host's Wayland/X11 libraries. Deliberately
-  # omit `voice_input` so portable bundles do not require the host ALSA runtime.
-  WARP_TUI_FEATURES="release_bundle,standalone"
-  if [[ "$RELEASE_CHANNEL" != "oss" ]]; then
-    WARP_TUI_FEATURES="$WARP_TUI_FEATURES,crash_reporting"
-  fi
 elif [[ "$ARTIFACT" == "app" ]]; then
-  # All channels ship the v3 classifier and v2 heuristic.
-  FEATURES="$FEATURES,gui,nld_classifier_v3,nld_heuristic_v2"
+  FEATURES="$FEATURES,gui"
 fi
 if [[ -n "$EXTRA_FEATURES" ]]; then
-  if [[ "$ARTIFACT" == "tui" ]]; then
-    WARP_TUI_FEATURES="$WARP_TUI_FEATURES,$EXTRA_FEATURES"
-  else
-    FEATURES="$FEATURES,$EXTRA_FEATURES"
-  fi
+  FEATURES="$FEATURES,$EXTRA_FEATURES"
 fi
 
-BUNDLE_ID="dev.warp.$APP_NAME"
+BUNDLE_ID="dev.jiffy.$APP_NAME"
+# The installed package name and its install directory, shared by all app package formats.
+APP_PACKAGE_NAME="jiffy"
+APP_OPT_DIR="/opt/$APP_PACKAGE_NAME"
 EXECUTABLE_PATH="$CARGO_TARGET_OUTPUT_DIR/$WARP_BIN"
 DEBUG_EXECUTABLE_PATH="$EXECUTABLE_PATH.debug"
 
-# Note that this variable must be set (and exported!) before we compile the
-# binary, as it is read at compile time by Linux autoupdate logic (to know the
-# expected name of the AppImage when downloading updates).
 export APPIMAGE_NAME="$APP_NAME-$BUILD_ARCH.AppImage"
 
 # If we only want to check that compilation will succeed, perform the checks
 # then exit.  We use this script to invoke `cargo check` to ensure that we are
 # using the same feature flags and profile that we would be using in production.
 if [[ "$CHECK_ONLY" == "true" ]]; then
-  if [[ "$ARTIFACT" == "tui" ]]; then
-    cargo check -p warp_tui --profile "$CARGO_PROFILE" --bin "$WARP_BIN" --features "$WARP_TUI_FEATURES"
-  else
-    cargo check -p warp --profile "$CARGO_PROFILE" --bin "$WARP_BIN" --features "$FEATURES" ${TARGET_TRIPLE:+--target $TARGET_TRIPLE}
-  fi
+  cargo check -p jiffy --profile "$CARGO_PROFILE" --bin "$WARP_BIN" --features "$FEATURES" ${TARGET_TRIPLE:+--target $TARGET_TRIPLE}
   exit 0
 fi
 
 # Build the binary.
 if [[ "$BUILD" == "true" ]]; then
-  echo "Building and bundling Warp for channel $RELEASE_CHANNEL and bundle id $BUNDLE_ID"
-  if [[ "$ARTIFACT" == "tui" ]]; then
-    cargo build -p warp_tui --profile "$CARGO_PROFILE" --bin "$WARP_BIN" --features "$WARP_TUI_FEATURES"
-  else
-    cargo build -p warp --profile "$CARGO_PROFILE" --bin "$WARP_BIN" --features "$FEATURES" ${TARGET_TRIPLE:+--target $TARGET_TRIPLE}
-  fi
+  echo "Building and bundling Jiffy with bundle id $BUNDLE_ID"
+  cargo build -p jiffy --profile "$CARGO_PROFILE" --bin "$WARP_BIN" --features "$FEATURES" ${TARGET_TRIPLE:+--target $TARGET_TRIPLE}
 
   echo "Making debug copy of '$EXECUTABLE_PATH' at '$DEBUG_EXECUTABLE_PATH'"
   cp "$EXECUTABLE_PATH" "$DEBUG_EXECUTABLE_PATH"
 
-  echo "Stripping debug symbols from '$EXECUTABLE_PATH'"
-  if [[ $RELEASE_CHANNEL = "dev" ]]; then
-    # For dev builds, only strip debug symbols, as we want to keep some
-    # symbols for profiling purposes.
-    "${WARP_MUSL_STRIP:-strip}" --strip-debug "$EXECUTABLE_PATH"
-  else
-    # For production builds, strip all symbols, to keep the binary size
-    # smaller.
-    "${WARP_MUSL_STRIP:-strip}" --strip-all "$EXECUTABLE_PATH"
-  fi
+  echo "Stripping symbols from '$EXECUTABLE_PATH'"
+  "${WARP_MUSL_STRIP:-strip}" --strip-all "$EXECUTABLE_PATH"
 else
   echo 'Skipping `cargo build` step due to --skip-build argument'
 fi
@@ -342,17 +257,10 @@ fi
 BINARY_PATH="$EXECUTABLE_PATH"
 if [[ "$ARTIFACT" == "warpctrl" ]]; then
   BINARY_PATH="$WARPCTRL_SCRIPT_PATH"
-elif [[ "$ARTIFACT" == "tui" ]]; then
-  echo "Copying TUI binary into $OUT_DIR/$WARP_BIN"
-  cp "$EXECUTABLE_PATH" "$OUT_DIR/$WARP_BIN"
-  BINARY_PATH="$OUT_DIR/$WARP_BIN"
 fi
 
 if [[ "${SKIP_SETTINGS_SCHEMA:-}" != "1" && -z "${SETTINGS_SCHEMA_EXECUTABLE:-}" && -z "${SETTINGS_SCHEMA_SOURCE:-}" ]]; then
-  if [[ "$ARTIFACT" == "tui" ]]; then
-    echo "Error: TUI bundles require SETTINGS_SCHEMA_SOURCE or SETTINGS_SCHEMA_EXECUTABLE." >&2
-    exit 1
-  elif [[ "$BUILD" != "true" ]]; then
+  if [[ "$BUILD" != "true" ]]; then
     echo "Error: --skip-build requires SETTINGS_SCHEMA_SOURCE or SETTINGS_SCHEMA_EXECUTABLE." >&2
     exit 1
   elif [[ "$BUILD_ARCH" != "$HOST_ARCH" ]]; then
@@ -381,7 +289,7 @@ if [[ "${SKIP_SETTINGS_SCHEMA:-}" != "1" && -n "${SETTINGS_SCHEMA_EXECUTABLE:-}"
 fi
 
 # Prepare bundled resources for standalone builds.
-if [[ "$ARTIFACT" == "cli" || "$ARTIFACT" == "warpctrl" || "$ARTIFACT" == "tui" ]]; then
+if [[ "$ARTIFACT" == "cli" || "$ARTIFACT" == "warpctrl" ]]; then
   echo "Preparing standalone resources directory"
   BUNDLED_RESOURCES_DIR="$OUT_DIR/resources"
   "$WORKSPACE_ROOT_DIR/script/prepare_bundled_resources" "$BUNDLED_RESOURCES_DIR" "$RELEASE_CHANNEL"
@@ -409,6 +317,8 @@ export \
   OUT_DIR \
   RELEASE_CHANNEL \
   BUNDLE_ID \
+  APP_PACKAGE_NAME \
+  APP_OPT_DIR \
   EXECUTABLE_PATH \
   BINARY_NAME \
   APPIMAGE_NAME \

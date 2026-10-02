@@ -6,6 +6,8 @@ pub mod extensions;
 pub mod file;
 pub mod git;
 pub mod image;
+#[cfg(feature = "local_fs")]
+pub mod jj;
 pub(crate) mod link_detection;
 pub mod links;
 pub mod openable_file_type;
