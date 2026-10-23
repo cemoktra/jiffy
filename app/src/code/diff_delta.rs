@@ -15,7 +15,7 @@ impl fmt::Debug for DiffDelta {
             write!(
                 f,
                 "DiffDelta {{\nreplacement_line_range: {:?},",
-                &self.replacement_line_range
+                self.replacement_line_range
             )?;
             f.write_str("\n--insertion--\n")?;
             f.write_str(&self.insertion)?;

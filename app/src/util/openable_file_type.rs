@@ -110,7 +110,7 @@ pub(crate) fn starts_with_shebang(path: &Path) -> bool {
     use std::io::Read;
     let mut prefix = [0u8; 2];
     match std::fs::File::open(path) {
-        Ok(mut file) => file.read_exact(&mut prefix).is_ok() && prefix == [b'#', b'!'],
+        Ok(mut file) => file.read_exact(&mut prefix).is_ok() && prefix == *b"#!",
         Err(_) => false,
     }
 }

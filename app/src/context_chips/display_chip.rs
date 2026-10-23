@@ -559,10 +559,9 @@ impl GitBranchTrackingStatus {
                 rebased = true;
             } else if let Some(ahead_count) = part.strip_prefix('↑') {
                 ahead = Self::parse_display_count(ahead_count)?;
-            } else if let Some(behind_count) = part.strip_prefix('↓') {
-                behind = Self::parse_display_count(behind_count)?;
             } else {
-                return None;
+                let behind_count = part.strip_prefix('↓')?;
+                behind = Self::parse_display_count(behind_count)?;
             }
         }
 

@@ -7,7 +7,6 @@ pub use errors::{ArgumentError, ParseError, ParseErrorReason};
 pub mod hir;
 pub mod simple;
 
-use derive_new::new;
 use hir::{ArgType, Command, Expression, ExternalCommand};
 use itertools::Itertools;
 use lazy_static::lazy_static;
@@ -29,9 +28,15 @@ lazy_static! {
 type SpannedKeyValue = (Spanned<String>, Spanned<String>);
 
 /// A `LitePipeline` is a series of `LiteCommand`s separated by `|`.
-#[derive(Debug, Clone, new)]
+#[derive(Debug, Clone)]
 pub struct LitePipeline {
     pub commands: Vec<LiteCommand>,
+}
+
+impl LitePipeline {
+    pub fn new(commands: Vec<LiteCommand>) -> Self {
+        Self { commands }
+    }
 }
 
 impl HasSpan for LitePipeline {
@@ -67,9 +72,15 @@ impl HasSpan for LiteCommand {
 }
 
 /// A `LiteGroup` is a series of `LitePipeline`s, separated by `;`.
-#[derive(Debug, Clone, new)]
+#[derive(Debug, Clone)]
 pub struct LiteGroup {
     pub pipelines: Vec<LitePipeline>,
+}
+
+impl LiteGroup {
+    pub fn new(pipelines: Vec<LitePipeline>) -> Self {
+        Self { pipelines }
+    }
 }
 
 impl HasSpan for LiteGroup {
@@ -80,9 +91,15 @@ impl HasSpan for LiteGroup {
 
 /// A `LiteRootNode` is the root node of the parsed AST. Essentially a series of `LiteGroup`s,
 /// separated by newlines.
-#[derive(Debug, Clone, new)]
+#[derive(Debug, Clone)]
 pub struct LiteRootNode {
     pub groups: Vec<LiteGroup>,
+}
+
+impl LiteRootNode {
+    pub fn new(groups: Vec<LiteGroup>) -> Self {
+        Self { groups }
+    }
 }
 
 impl HasSpan for LiteRootNode {

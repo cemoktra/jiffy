@@ -3388,7 +3388,8 @@ impl Iterator for CharsWithStyle<'_> {
             } else {
                 loop {
                     self.fragments_cursor.prev();
-                    if let Some(fragment) = self.fragments_cursor.item() {
+                    {
+                        let fragment = self.fragments_cursor.item()?;
                         if fragment.is_visible(self.undo_history) {
                             self.fragment_offset = fragment.len();
                             self.fragment_chars = fragment.text.as_str().chars();
@@ -3399,8 +3400,6 @@ impl Iterator for CharsWithStyle<'_> {
                                 .next_back()
                                 .map(|char| StylizedChar::new(char, self.fragment_text_style));
                         }
-                    } else {
-                        return None;
                     }
                 }
             }
@@ -3410,7 +3409,8 @@ impl Iterator for CharsWithStyle<'_> {
         } else {
             loop {
                 self.fragments_cursor.next();
-                if let Some(fragment) = self.fragments_cursor.item() {
+                {
+                    let fragment = self.fragments_cursor.item()?;
                     if fragment.is_visible(self.undo_history) {
                         self.fragment_chars = fragment.text.as_str().chars();
                         self.fragment_text_style = fragment.text.text_style().unwrap_or_default();
@@ -3420,8 +3420,6 @@ impl Iterator for CharsWithStyle<'_> {
                             .next()
                             .map(|char| StylizedChar::new(char, self.fragment_text_style));
                     }
-                } else {
-                    return None;
                 }
             }
         }

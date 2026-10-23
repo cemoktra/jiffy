@@ -146,8 +146,7 @@ impl SearchItem for MatchedBinding {
 
         format!(
             "Selected {}, {}.",
-            &self
-                .binding
+            self.binding
                 .description
                 .in_context(DescriptionContext::Default),
             trigger.map(Keystroke::normalized).unwrap_or_default()

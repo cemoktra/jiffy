@@ -41,7 +41,7 @@ pub(super) fn get_all_restored_blocks(
         })
         .collect::<HashMap<_, Vec<SerializedBlock>>>();
 
-    for (_, blocks) in all_block_items_by_pane.iter_mut() {
+    for blocks in all_block_items_by_pane.values_mut() {
         blocks.sort_by_key(|block| block.start_ts);
         // Only keep most recent command blocks
         blocks.drain(

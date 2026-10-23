@@ -1030,7 +1030,9 @@ fn decode_uuid_hex(hex: &str) -> Option<Vec<u8>> {
         return None;
     }
 
-    hex.chunks_exact(2)
+    hex.as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| {
             let high = (pair[0] as char).to_digit(16)?;
             let low = (pair[1] as char).to_digit(16)?;

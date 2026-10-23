@@ -2388,7 +2388,7 @@ impl BlockList {
             log::info!(
                 "Incrementing stage from {:?} to {:?}",
                 self.bootstrap_stage,
-                &next_bootstrap_stage
+                next_bootstrap_stage
             );
             self.bootstrap_stage = next_bootstrap_stage;
         }

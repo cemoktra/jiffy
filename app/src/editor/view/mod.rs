@@ -3,7 +3,6 @@ mod model;
 mod movement;
 mod snapshot;
 
-use core::f32;
 use std::borrow::Cow;
 use std::cmp::{self, Ordering};
 use std::collections::HashMap;
@@ -3932,7 +3931,7 @@ impl EditorView {
         if !self.vim_mode_enabled(ctx)
             || self
                 .vim_mode(ctx)
-                .is_some_and(|vim_mode| matches![vim_mode, VimMode::Normal | VimMode::Insert])
+                .is_some_and(|vim_mode| matches!(vim_mode, VimMode::Normal | VimMode::Insert))
         {
             self.clear_buffer(ctx);
         }

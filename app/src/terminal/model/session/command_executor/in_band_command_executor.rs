@@ -235,7 +235,7 @@ impl InBandCommandExecutor {
                     log::warn!(
                         "Cached in-band command ID {} does not match ID of executed in-band command output {}",
                         cmd.id,
-                        &event.command_id
+                        event.command_id
                     );
                     // If the command event that we received is not for the current running command,
                     // we need to restore the command as the currently running command.
